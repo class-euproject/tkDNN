@@ -110,8 +110,29 @@ target_link_libraries(test_rtinference tkDNN)
 add_executable(map_demo demo/demo/map.cpp)
 target_link_libraries(map_demo tkDNN)
 
+## load in pkg-config support
+find_package(PkgConfig)
+## use pkg-config to get hints for 0mq locations
+pkg_check_modules(PC_ZeroMQ QUIET zmq)
+
+## use the hint from above to find where 'zmq.hpp' is located
+find_path(ZeroMQ_INCLUDE_DIR
+        NAMES zmq.hpp
+        PATHS ${PC_ZeroMQ_INCLUDE_DIRS}
+        )
+
+## use the hint from about to find the location of libzmq
+find_library(ZeroMQ_LIBRARY
+        NAMES zmq
+        PATHS ${PC_ZeroMQ_LIBRARY_DIRS}
+        )
+
+include_directories("${CMAKE_CURRENT_LIST_DIR}/../include"
+                    "${CMAKE_CURRENT_LIST_DIR}/../tkCommon/include"
+                    "${CMAKE_CURRENT_LIST_DIR}/../class-tracker/include"
+                    "${CMAKE_CURRENT_LIST_DIR}/../masa_protocol/include")
 add_executable(demo demo/demo/demo.cpp)
-target_link_libraries(demo tkDNN)
+target_link_libraries(demo tkDNN class-edge python2.7 ${ZeroMQ_LIBRARY} gdal)
 
 #-------------------------------------------------------------------------------
 # Install
