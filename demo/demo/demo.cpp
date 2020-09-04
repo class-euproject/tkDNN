@@ -23,35 +23,59 @@ void sig_handler(int signo) {
     app_socket->close();
 }
 
-edge::camera prepareCamera(std::string *input) {
-    edge::camera_params camera_params;
-    std::string tif_map_path           = "../../data/masa_map.tif";
-    camera_params.id                   = 20936;
-    camera_params.input                = *input;
-    camera_params.pmatrixPath          = "../../data/pmat_new/pmat_07-03-20936_20p.txt";
-    camera_params.maskfilePath         = "../../data/masks/20936_mask.jpg";
-    camera_params.cameraCalibPath      = "../../data/calib_cameras/20936.params";
-    camera_params.maskFileOrientPath   = "../../data/masks_orient/1920-1080_mask_null.jpg";
-    camera_params.streamWidth          = 960;
-    camera_params.streamHeight         = 540;
-    camera_params.show                 = false;
+edge::camera prepareCamera(int camera_id, std::string &net, char &type, int &n_classes) {
+    YAML::Node config = YAML::LoadFile("../../data/all_cameras_en.yaml");
+    YAML::Node cameras_yaml = config["cameras"];
+
+    net = config["net"].as<std::string>();
+    type = config["type"].as<char>();
+    n_classes = config["classes"].as<int>();
+    std::string tif_map_path = config["tif"].as<std::string>();
+
+    edge::camera_params camera_par;
+    for (auto && cam_yaml : cameras_yaml) {
+        int ref_cam_id = cam_yaml["id"].as<int>();
+        if (ref_cam_id != camera_id) continue;
+        if (cam_yaml["encrypted"].as<int>()) {
+            //camera_par.input = decryptString(cam_yaml["input"].as<std::string>(),);
+            throw;
+        } else {
+            camera_par.input = cam_yaml["input"].as<std::string>();
+        }
+        camera_par.pmatrixPath        = cam_yaml["pmatrix"].as<std::string>();
+        camera_par.maskfilePath       = cam_yaml["maskfile"].as<std::string>();
+        camera_par.cameraCalibPath    = cam_yaml["cameraCalib"].as<std::string>();
+        camera_par.maskFileOrientPath = cam_yaml["maskFileOrient"].as<std::string>();
+        break;
+    }
+
+    std::cout << "Camera parameters read!" << std::endl << camera_par << std::endl;
+
+    edge::Dataset_t dataset;
+    switch (n_classes) {
+        case 10: dataset = edge::Dataset_t::BDD; break;
+        case 80: dataset = edge::Dataset_t::COCO; break;
+        default: FatalError("Dataset type not supported yet, check number of classes in parameter file.");
+    }
 
     edge::camera camera;
-    readCalibrationMatrix(camera_params.cameraCalibPath, camera.calibMat, camera.distCoeff, camera.calibWidth, camera.calibHeight);
-    readProjectionMatrix(camera_params.pmatrixPath, camera.prjMat);
-    camera.id           = camera_params.id;
-    camera.input        = camera_params.input;
-    camera.streamWidth  = camera_params.streamWidth;
-    camera.streamHeight = camera_params.streamHeight;
-    camera.show         = camera_params.show;
-    camera.invPrjMat    = camera.prjMat.inv();
-    camera.dataset      = edge::Dataset_t::BDD;
-    std::vector<edge::camera> cameras;
-    cameras.push_back(camera);
-    // initializeCamerasNetworks(cameras, net, ntype, n_classes);
+    std::cout << "Reading calibration matrix in " << camera_par.cameraCalibPath << std::endl;
+    readCalibrationMatrix(camera_par.cameraCalibPath, camera.calibMat, camera.distCoeff, camera.calibWidth, camera.calibHeight);
+    std::cout << "Calibration matrix read!" << std::endl << camera.calibMat << std::endl;
+    std::cout << "Reading projection matrix in " << camera_par.pmatrixPath << std::endl;
+    readProjectionMatrix(camera_par.pmatrixPath, camera.prjMat);
+    std::cout << "Projection matrix read!" << std::endl << camera.calibMat << std::endl;
+    camera.id = camera_par.id;
+    camera.input = camera_par.input;
+    camera.streamWidth = config["width"].as<int>();
+    camera.streamHeight = config["height"].as<int>();
+    camera.show = true; // THIS SHOULD BE INPUT
+    camera.invPrjMat = camera.prjMat.inv();
+    camera.dataset = dataset;
+
     camera.adfGeoTransform = (double *) malloc(6 * sizeof(double));
     readTiff(tif_map_path, camera.adfGeoTransform);
-    camera.geoConv.initialiseReference(44.655540, 10.934315, 0);
+    camera.geoConv.initialiseReference(44.655540, 10.934315, 0); // THIS?
     return camera;
 }
 
@@ -102,26 +126,39 @@ int main(int argc, char *argv[]) {
     std::cout<<"detection!\n";
     signal(SIGINT, sig_handler);
 
-    std::string net = "yolo3_berkeley_fp32.rt";
-    if(argc > 1)
-        net = argv[1]; 
-    // std::string input = "../demo/yolo_test.mp4";
-    // std::string input = "../../tkDNN/demo/yolo_test.mp4";
-    std::string input = "../../data/20936.mp4";
+    int camera_id = 20939;
+    if (argc > 1) {
+        camera_id = atoi(argv[1]);
+    }
+    std::string socketPort = "5559";
     if(argc > 2)
-        input = argv[2]; 
-    char ntype = 'y';
+        socketPort = argv[1];
+    /*
+    std::string net = "yolo3_berkeley_fp32.rt";
     if(argc > 3)
-        ntype = argv[3][0]; 
-    int n_classes = 80;
+        net = argv[2];
+    char ntype = 'y';
     if(argc > 4)
-        n_classes = atoi(argv[4]); 
-    int n_batch = 1;
+        ntype = argv[4][0];
+    int n_classes = 80;
     if(argc > 5)
-        n_batch = atoi(argv[5]); 
-    bool show = false;
+        n_classes = atoi(argv[5]);
+    int n_batch = 1;
     if(argc > 6)
-        show = atoi(argv[6]);
+        n_batch = atoi(argv[6]);
+    */
+    bool show = false;
+    if(argc > 3)
+        show = atoi(argv[3]);
+    int n_batch = 1;
+    if(argc > 4)
+        n_batch = atoi(argv[4]);
+
+    std::string net;
+    char ntype;
+    int n_classes;
+
+    edge::camera camera = prepareCamera(camera_id, net, ntype, n_classes);
 
     if(n_batch < 1 || n_batch > 64)
         FatalError("Batch dim not supported");
@@ -130,7 +167,6 @@ int main(int argc, char *argv[]) {
         SAVE_RESULT = true;
 
     double north, east;
-    edge::camera camera = prepareCamera(&input);
 
     tk::dnn::Yolo3Detection yolo;
     tk::dnn::CenternetDetection cnet;
@@ -158,11 +194,14 @@ int main(int argc, char *argv[]) {
 
     gRun = true;
 
-    cv::VideoCapture cap(input);
-    if(!cap.isOpened())
-        gRun = false; 
-    else
-        std::cout<<"camera started\n";
+    std::cout << "Opening VideoCapture for input " << camera.input << std::endl;
+    cv::VideoCapture cap(camera.input);
+    if(!cap.isOpened()) {
+        std::cout << "Camera could not be started." << std::endl;
+        exit(1);
+    } else {
+        std::cout << "Camera started" << std::endl;
+    }
 
     cv::VideoWriter resultVideo;
     if(SAVE_RESULT) {
@@ -181,7 +220,7 @@ int main(int argc, char *argv[]) {
     zmq::context_t context(1);
     zmq::message_t unimportant_message;
     app_socket = new zmq::socket_t(context, ZMQ_REQ);
-    app_socket->bind("tcp://0.0.0.0:5559");
+    app_socket->bind("tcp://0.0.0.0:" + socketPort);
 
     unsigned int frameAmount = 0;
     std::vector<tk::dnn::box> box_vector;
@@ -208,6 +247,7 @@ int main(int argc, char *argv[]) {
         for (auto &box_batch : detNN->batchDetected) {
             for (auto &box : box_batch) {
                 convertCameraPixelsToMapMeters(box.x, box.y, box.cl, camera, north, east);
+                // pixel2GPS(box.x, box.y, lat, lon, camera.adfGeoTransform);
                 box_vector.push_back(box);
                 coords.push_back(std::make_tuple(north, east));
                 // printf("\t(%f,%f) converted to (%f,%f)\n", box.x, box.y, north, east);
@@ -233,13 +273,11 @@ int main(int argc, char *argv[]) {
                 cv::waitKey(1);
             }
         }
+        /*
         if (n_batch == 1 && SAVE_RESULT)
-            resultVideo << frame;
+            resultVideo << frame;*/
 
         frameAmount += n_batch;
-        if (frameAmount == 50) {
-            gRun = false;
-        }
     }
 
     std::cout<<"detection end\n";
@@ -261,4 +299,3 @@ int main(int argc, char *argv[]) {
 
     return 0;
 }
-
