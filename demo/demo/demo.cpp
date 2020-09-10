@@ -213,8 +213,8 @@ int main(int argc, char *argv[]) {
     std::vector<cv::Mat> batch_dnn_input;
 
     zmq::message_t unimportant_message;
+    zmq::context_t context(1);
     if (use_socket) {
-        zmq::context_t context(1);
         app_socket = new zmq::socket_t(context, ZMQ_REQ);
         std::cout << "Connecting to tcp://0.0.0.0:" << socketPort << std::endl;
         app_socket->bind("tcp://0.0.0.0:" + socketPort);
