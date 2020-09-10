@@ -30,7 +30,8 @@ edge::camera prepareCamera(int camera_id, std::string &net, char &type, int &n_c
     net = config["net"].as<std::string>();
     type = config["type"].as<char>();
     n_classes = config["classes"].as<int>();
-    std::string tif_map_path = config["tif"].as<std::string>();
+    std::string tif_map_path = config["tif"].as<std::string>(); // TODO
+    // std::string tif_map_path = "../../data/map_modified.tif";
 
     edge::camera_params camera_par;
     for (auto && cam_yaml : cameras_yaml) {
@@ -126,34 +127,25 @@ int main(int argc, char *argv[]) {
     std::cout<<"detection!\n";
     signal(SIGINT, sig_handler);
 
-    int camera_id = 20939;
+    bool use_socket = true;
     if (argc > 1) {
-        camera_id = atoi(argv[1]);
+        use_socket = atoi(argv[1]);
+    }
+    int camera_id = 20939;
+    if (argc > 2) {
+        camera_id = atoi(argv[2]);
     }
     std::string socketPort = "5559";
-    if(argc > 2)
-        socketPort = argv[1];
-    /*
-    std::string net = "yolo3_berkeley_fp32.rt";
-    if(argc > 3)
-        net = argv[2];
-    char ntype = 'y';
-    if(argc > 4)
-        ntype = argv[4][0];
-    int n_classes = 80;
-    if(argc > 5)
-        n_classes = atoi(argv[5]);
-    int n_batch = 1;
-    if(argc > 6)
-        n_batch = atoi(argv[6]);
-    */
+    int argv_ref = 2;
+    if (use_socket) {
+        if (argc > ++argv_ref)
+            socketPort = argv[argv_ref];
+    }
     bool show = false;
-    if(argc > 3)
-        show = atoi(argv[3]);
-    int n_batch = 1;
-    if(argc > 4)
-        n_batch = atoi(argv[4]);
+    if(argc > ++argv_ref)
+        show = atoi(argv[argv_ref]);
 
+    int n_batch = 1;
     std::string net;
     char ntype;
     int n_classes;
@@ -163,8 +155,7 @@ int main(int argc, char *argv[]) {
     if(n_batch < 1 || n_batch > 64)
         FatalError("Batch dim not supported");
 
-    if(!show)
-        SAVE_RESULT = true;
+    // if(!show) SAVE_RESULT = true;
 
     double north, east;
 
@@ -211,16 +202,23 @@ int main(int argc, char *argv[]) {
     }
 
     cv::Mat frame;
-    if(show)
+    if(show) {
+        std::cout << "Opening window..." << std::endl;
         cv::namedWindow("detection", cv::WINDOW_NORMAL);
+        cv::resizeWindow("detection", 1024, 800);
+        std::cout << "Window successfully opened" << std::endl;
+    }
 
     std::vector<cv::Mat> batch_frame;
     std::vector<cv::Mat> batch_dnn_input;
 
-    zmq::context_t context(1);
     zmq::message_t unimportant_message;
-    app_socket = new zmq::socket_t(context, ZMQ_REQ);
-    app_socket->bind("tcp://0.0.0.0:" + socketPort);
+    if (use_socket) {
+        zmq::context_t context(1);
+        app_socket = new zmq::socket_t(context, ZMQ_REQ);
+        std::cout << "Connecting to tcp://0.0.0.0:" << socketPort << std::endl;
+        app_socket->bind("tcp://0.0.0.0:" + socketPort);
+    }
 
     unsigned int frameAmount = 0;
     std::vector<tk::dnn::box> box_vector;
@@ -256,14 +254,16 @@ int main(int argc, char *argv[]) {
         detNN->draw(batch_frame);
 
         // send thru socket
-        unsigned int size;
-        char *data = prepareMessage(box_vector, coords, frameAmount, &size);
-        zmq::message_t message(size);
-        memcpy(message.data(), data, size);
-        std::cout << "[" << frameAmount << "] Waiting for message..." << std::endl;
-        app_socket->send(message, 0);
-        free(data);
-        app_socket->recv(&unimportant_message);
+        if (use_socket) {
+            unsigned int size;
+            char *data = prepareMessage(box_vector, coords, frameAmount, &size);
+            zmq::message_t message(size);
+            memcpy(message.data(), data, size);
+            std::cout << "[" << frameAmount << "] Waiting for message..." << std::endl;
+            app_socket->send(message, 0);
+            free(data);
+            app_socket->recv(&unimportant_message);
+        }
         box_vector.clear();
         coords.clear();
 
@@ -281,9 +281,12 @@ int main(int argc, char *argv[]) {
     }
 
     std::cout<<"detection end\n";
-    char flag = 0;
-    app_socket->send(&flag, 0);
-    app_socket->recv(&unimportant_message);
+
+    if (use_socket) {
+        char flag = 0;
+        app_socket->send(&flag, 0);
+        app_socket->recv(&unimportant_message);
+    }
 
     double mean = 0;
     std::cout<<COL_GREENB<<"\n\nTime stats:\n";
@@ -292,10 +295,12 @@ int main(int argc, char *argv[]) {
     for (int i=0; i<detNN->stats.size(); i++) mean += detNN->stats[i]; mean /= detNN->stats.size();
     std::cout<<"Avg: "<<mean/n_batch<<" ms\t"<<1000/(mean/n_batch)<<" FPS\n"<<COL_END;
 
-    if (app_socket->connected()) {
-        app_socket->close();
+    if (use_socket) {
+        if (app_socket->connected()) {
+            app_socket->close();
+        }
+        delete app_socket;
     }
-    delete app_socket;
 
     return 0;
 }
