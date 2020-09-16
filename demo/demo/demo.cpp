@@ -23,7 +23,7 @@ void sig_handler(int signo) {
     app_socket->close();
 }
 
-edge::camera prepareCamera(int camera_id, std::string &net, char &type, int &n_classes) {
+edge::camera prepareCamera(int camera_id, std::string &net, char &type, int &n_classes, bool show) {
     YAML::Node config = YAML::LoadFile("../../data/all_cameras_en.yaml");
     YAML::Node cameras_yaml = config["cameras"];
 
@@ -37,6 +37,7 @@ edge::camera prepareCamera(int camera_id, std::string &net, char &type, int &n_c
     for (auto && cam_yaml : cameras_yaml) {
         int ref_cam_id = cam_yaml["id"].as<int>();
         if (ref_cam_id != camera_id) continue;
+        camera_par.id = ref_cam_id;
         if (cam_yaml["encrypted"].as<int>()) {
             //camera_par.input = decryptString(cam_yaml["input"].as<std::string>(),);
             throw;
@@ -47,6 +48,7 @@ edge::camera prepareCamera(int camera_id, std::string &net, char &type, int &n_c
         camera_par.maskfilePath       = cam_yaml["maskfile"].as<std::string>();
         camera_par.cameraCalibPath    = cam_yaml["cameraCalib"].as<std::string>();
         camera_par.maskFileOrientPath = cam_yaml["maskFileOrient"].as<std::string>();
+        camera_par.show               = show;
         break;
     }
 
@@ -76,11 +78,16 @@ edge::camera prepareCamera(int camera_id, std::string &net, char &type, int &n_c
 
     camera.adfGeoTransform = (double *) malloc(6 * sizeof(double));
     readTiff(tif_map_path, camera.adfGeoTransform);
-    camera.geoConv.initialiseReference(44.655540, 10.934315, 0); // THIS?
+    /*std::cout << "TIFF: " << camera.adfGeoTransform[0] << " " << camera.adfGeoTransform[1] << " "
+                          << camera.adfGeoTransform[2] << " " << camera.adfGeoTransform[3] << " "
+                          << camera.adfGeoTransform[4] << " " << camera.adfGeoTransform[5] << std::endl;*/
     return camera;
 }
 
 char* prepareMessage(std::vector<tk::dnn::box> &box_vector, std::vector<std::tuple<float, float>> &coords, unsigned int frameAmount, unsigned int *size) {
+    box_vector.erase(std::remove_if(box_vector.begin(), box_vector.end(), [](tk::dnn::box &box) {
+        return box.cl == 7 || box.cl == 8;
+    }), box_vector.end());
     *size = box_vector.size() * (sizeof(double) * 2 + sizeof(int) + 1 + sizeof(float) * 4) + 1;
     char *data = (char *) malloc(*size);
     char *data_origin = data;
@@ -150,7 +157,7 @@ int main(int argc, char *argv[]) {
     char ntype;
     int n_classes;
 
-    edge::camera camera = prepareCamera(camera_id, net, ntype, n_classes);
+    edge::camera camera = prepareCamera(camera_id, net, ntype, n_classes, show);
 
     if(n_batch < 1 || n_batch > 64)
         FatalError("Batch dim not supported");
@@ -218,6 +225,8 @@ int main(int argc, char *argv[]) {
         app_socket = new zmq::socket_t(context, ZMQ_REQ);
         std::cout << "Connecting to tcp://0.0.0.0:" << socketPort << std::endl;
         app_socket->bind("tcp://0.0.0.0:" + socketPort);
+    } else {
+        std::cout << "Not opening socket" << std::endl;
     }
 
     unsigned int frameAmount = 0;
@@ -245,13 +254,22 @@ int main(int argc, char *argv[]) {
         for (auto &box_batch : detNN->batchDetected) {
             for (auto &box : box_batch) {
                 convertCameraPixelsToMapMeters(box.x, box.y, box.cl, camera, north, east);
+                // double lat, lon;
                 // pixel2GPS(box.x, box.y, lat, lon, camera.adfGeoTransform);
+                // std::cout << "LAT: " << lat << " LON: " << lon << std::endl;
                 box_vector.push_back(box);
                 coords.push_back(std::make_tuple(north, east));
                 // printf("\t(%f,%f) converted to (%f,%f)\n", box.x, box.y, north, east);
             }
         }
         detNN->draw(batch_frame);
+
+        if (show) {
+            for (int bi=0; bi < n_batch; ++bi) {
+                cv::imshow("detection", batch_frame[bi]);
+                cv::waitKey(1);
+            }
+        }
 
         // send thru socket
         if (use_socket) {
@@ -266,13 +284,6 @@ int main(int argc, char *argv[]) {
         }
         box_vector.clear();
         coords.clear();
-
-        if (show) {
-            for (int bi=0; bi < n_batch; ++bi) {
-                cv::imshow("detection", batch_frame[bi]);
-                cv::waitKey(1);
-            }
-        }
         /*
         if (n_batch == 1 && SAVE_RESULT)
             resultVideo << frame;*/
