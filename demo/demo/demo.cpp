@@ -30,8 +30,7 @@ edge::camera prepareCamera(int camera_id, std::string &net, char &type, int &n_c
     net = config["net"].as<std::string>();
     type = config["type"].as<char>();
     n_classes = config["classes"].as<int>();
-    std::string tif_map_path = config["tif"].as<std::string>(); // TODO
-    // std::string tif_map_path = "../../data/map_modified.tif";
+    std::string tif_map_path = config["tif"].as<std::string>();
 
     edge::camera_params camera_par;
     for (auto && cam_yaml : cameras_yaml) {
@@ -49,10 +48,14 @@ edge::camera prepareCamera(int camera_id, std::string &net, char &type, int &n_c
         camera_par.cameraCalibPath    = cam_yaml["cameraCalib"].as<std::string>();
         camera_par.maskFileOrientPath = cam_yaml["maskFileOrient"].as<std::string>();
         camera_par.show               = show;
+        if (cam_yaml["tif"]) {
+            tif_map_path = cam_yaml["tif"].as<std::string>();
+        }
         break;
     }
 
     std::cout << "Camera parameters read!" << std::endl << camera_par << std::endl;
+    std::cout << "Using TIF at " << tif_map_path << std::endl;
 
     edge::Dataset_t dataset;
     switch (n_classes) {
@@ -78,9 +81,6 @@ edge::camera prepareCamera(int camera_id, std::string &net, char &type, int &n_c
 
     camera.adfGeoTransform = (double *) malloc(6 * sizeof(double));
     readTiff(tif_map_path, camera.adfGeoTransform);
-    /*std::cout << "TIFF: " << camera.adfGeoTransform[0] << " " << camera.adfGeoTransform[1] << " "
-                          << camera.adfGeoTransform[2] << " " << camera.adfGeoTransform[3] << " "
-                          << camera.adfGeoTransform[4] << " " << camera.adfGeoTransform[5] << std::endl;*/
     return camera;
 }
 
