@@ -84,15 +84,17 @@ edge::camera prepareCamera(int camera_id, std::string &net, char &type, int &n_c
     return camera;
 }
 
-char* prepareMessage(std::vector<tk::dnn::box> &box_vector, std::vector<std::tuple<float, float>> &coords, unsigned int frameAmount, unsigned int *size) {
+char* prepareMessage(std::vector<tk::dnn::box> &box_vector, std::vector<std::tuple<float, float>> &coords, unsigned int frameAmount, int cam_id, unsigned int *size) {
     box_vector.erase(std::remove_if(box_vector.begin(), box_vector.end(), [](tk::dnn::box &box) {
         return box.cl == 7 || box.cl == 8;
     }), box_vector.end());
-    *size = box_vector.size() * (sizeof(double) * 2 + sizeof(int) + 1 + sizeof(float) * 4) + 1;
+    *size = box_vector.size() * (sizeof(double) * 2 + sizeof(int) + 1 + sizeof(float) * 4) + 1 + sizeof(int);
     char *data = (char *) malloc(*size);
     char *data_origin = data;
     char flag = ~0;
     memcpy(data++, &flag, 1);
+    memcpy(data, &cam_id, sizeof(int));
+    data += sizeof(int);
     /*
     char double_size = (char) sizeof(double);
     memcpy(data++, &double_size, 1);
@@ -159,7 +161,7 @@ int main(int argc, char *argv[]) {
 
     edge::camera camera = prepareCamera(camera_id, net, ntype, n_classes, show);
 
-    if(n_batch < 1 || n_batch > 64)
+    if (n_batch < 1 || n_batch > 64)
         FatalError("Batch dim not supported");
 
     // if(!show) SAVE_RESULT = true;
@@ -274,7 +276,7 @@ int main(int argc, char *argv[]) {
         // send thru socket
         if (use_socket) {
             unsigned int size;
-            char *data = prepareMessage(box_vector, coords, frameAmount, &size);
+            char *data = prepareMessage(box_vector, coords, frameAmount, camera_id, &size);
             zmq::message_t message(size);
             memcpy(message.data(), data, size);
             std::cout << "[" << frameAmount << "] Waiting for message..." << std::endl;
@@ -286,7 +288,8 @@ int main(int argc, char *argv[]) {
         coords.clear();
         /*
         if (n_batch == 1 && SAVE_RESULT)
-            resultVideo << frame;*/
+            resultVideo << frame;
+        */
 
         frameAmount += n_batch;
     }
