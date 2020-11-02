@@ -39,6 +39,7 @@ edge::camera prepareCamera(int camera_id, std::string &net, char &type, int &n_c
         camera_par.id = ref_cam_id;
         if (cam_yaml["encrypted"].as<int>()) {
             //camera_par.input = decryptString(cam_yaml["input"].as<std::string>(),);
+            std::cout << "The input file is encrypted. Throwing exception" << std::endl;
             throw;
         } else {
             camera_par.input = cam_yaml["input"].as<std::string>();
@@ -52,6 +53,11 @@ edge::camera prepareCamera(int camera_id, std::string &net, char &type, int &n_c
             tif_map_path = cam_yaml["tif"].as<std::string>();
         }
         break;
+    }
+
+    if (!camera_par.id) {
+        std::cout << "No camera data could be found with given id " << camera_id << std::endl;
+        throw;
     }
 
     std::cout << "Camera parameters read!" << std::endl << camera_par << std::endl;
@@ -106,13 +112,13 @@ char* prepareMessage(std::vector<tk::dnn::box> &box_vector, std::vector<std::tup
     for (int i = 0; i < box_vector.size(); i++) {
         tk::dnn::box box = box_vector[i];
         std::tuple<float, float> coord = coords[i];
-        double coord_north = std::get<0>(coord);
-        double coord_east = std::get<1>(coord);
+        double lat = std::get<0>(coord);
+        double lon = std::get<1>(coord);
         // double double uint char float float float float
-        // printf("%f %f %u %i %f %f %f %f\n", coord_north, coord_east, frameAmount, box.cl, box.x, box.y, box.w, box.h);
-        memcpy(data, &coord_north, sizeof(double));
+        // printf("%f %f %u %i %f %f %f %f\n", lat, lon, frameAmount, box.cl, box.x, box.y, box.w, box.h);
+        memcpy(data, &lat, sizeof(double));
         data += sizeof(double);
-        memcpy(data, &coord_east, sizeof(double));
+        memcpy(data, &lon, sizeof(double));
         data += sizeof(double);
         memcpy(data, &frameAmount, sizeof(unsigned int));
         data += sizeof(unsigned int);
@@ -132,7 +138,6 @@ char* prepareMessage(std::vector<tk::dnn::box> &box_vector, std::vector<std::tup
 }
 
 int main(int argc, char *argv[]) {
-
     std::cout<<"detection!\n";
     signal(SIGINT, sig_handler);
 
@@ -147,8 +152,9 @@ int main(int argc, char *argv[]) {
     std::string socketPort = "5559";
     int argv_ref = 2;
     if (use_socket) {
-        if (argc > ++argv_ref)
+        if (argc > ++argv_ref) {
             socketPort = argv[argv_ref];
+        }
     }
     bool show = false;
     if(argc > ++argv_ref)
@@ -256,11 +262,11 @@ int main(int argc, char *argv[]) {
         for (auto &box_batch : detNN->batchDetected) {
             for (auto &box : box_batch) {
                 convertCameraPixelsToMapMeters(box.x, box.y, box.cl, camera, north, east);
-                // double lat, lon;
-                // pixel2GPS(box.x, box.y, lat, lon, camera.adfGeoTransform);
+                double lat, lon;
+                pixel2GPS(box.x, box.y, lat, lon, camera.adfGeoTransform);
                 // std::cout << "LAT: " << lat << " LON: " << lon << std::endl;
                 box_vector.push_back(box);
-                coords.push_back(std::make_tuple(north, east));
+                coords.push_back(std::make_tuple(lat, lon));
                 // printf("\t(%f,%f) converted to (%f,%f)\n", box.x, box.y, north, east);
             }
         }
