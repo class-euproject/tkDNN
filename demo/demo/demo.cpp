@@ -87,6 +87,7 @@ edge::camera prepareCamera(int camera_id, std::string &net, char &type, int &n_c
 
     camera.adfGeoTransform = (double *) malloc(6 * sizeof(double));
     readTiff(tif_map_path, camera.adfGeoTransform);
+    camera.geoConv.initialiseReference(44.655540, 10.934315, 0);
     return camera;
 }
 
@@ -112,13 +113,13 @@ char* prepareMessage(std::vector<tk::dnn::box> &box_vector, std::vector<std::tup
     for (int i = 0; i < box_vector.size(); i++) {
         tk::dnn::box box = box_vector[i];
         std::tuple<float, float> coord = coords[i];
-        double lat = std::get<0>(coord);
-        double lon = std::get<1>(coord);
+        double north = std::get<0>(coord);
+        double east = std::get<1>(coord);
         // double double uint char float float float float
-        // printf("%f %f %u %i %f %f %f %f\n", lat, lon, frameAmount, box.cl, box.x, box.y, box.w, box.h);
-        memcpy(data, &lat, sizeof(double));
+        // printf("%f %f %u %i %f %f %f %f\n", north, east, frameAmount, box.cl, box.x, box.y, box.w, box.h);
+        memcpy(data, &north, sizeof(double));
         data += sizeof(double);
-        memcpy(data, &lon, sizeof(double));
+        memcpy(data, &east, sizeof(double));
         data += sizeof(double);
         memcpy(data, &frameAmount, sizeof(unsigned int));
         data += sizeof(unsigned int);
@@ -262,11 +263,11 @@ int main(int argc, char *argv[]) {
         for (auto &box_batch : detNN->batchDetected) {
             for (auto &box : box_batch) {
                 convertCameraPixelsToMapMeters(box.x, box.y, box.cl, camera, north, east);
-                double lat, lon;
-                pixel2GPS(box.x, box.y, lat, lon, camera.adfGeoTransform);
+                // double lat, lon;
+                // pixel2GPS(box.x, box.y, lat, lon, camera.adfGeoTransform);
                 // std::cout << "LAT: " << lat << " LON: " << lon << std::endl;
                 box_vector.push_back(box);
-                coords.push_back(std::make_tuple(lat, lon));
+                coords.push_back(std::make_tuple(north, east));
                 // printf("\t(%f,%f) converted to (%f,%f)\n", box.x, box.y, north, east);
             }
         }
