@@ -23,7 +23,7 @@ void sig_handler(int signo) {
     app_socket->close();
 }
 
-edge::camera prepareCamera(int camera_id, std::string &net, char &type, int &n_classes) {
+edge::camera prepareCamera(int camera_id, std::string &net, char &type, int &n_classes, bool show) {
     YAML::Node config = YAML::LoadFile("../../data/all_cameras_en.yaml");
     YAML::Node cameras_yaml = config["cameras"];
 
@@ -36,8 +36,10 @@ edge::camera prepareCamera(int camera_id, std::string &net, char &type, int &n_c
     for (auto && cam_yaml : cameras_yaml) {
         int ref_cam_id = cam_yaml["id"].as<int>();
         if (ref_cam_id != camera_id) continue;
+        camera_par.id = ref_cam_id;
         if (cam_yaml["encrypted"].as<int>()) {
             //camera_par.input = decryptString(cam_yaml["input"].as<std::string>(),);
+            std::cout << "The input file is encrypted. Throwing exception" << std::endl;
             throw;
         } else {
             camera_par.input = cam_yaml["input"].as<std::string>();
@@ -46,10 +48,20 @@ edge::camera prepareCamera(int camera_id, std::string &net, char &type, int &n_c
         camera_par.maskfilePath       = cam_yaml["maskfile"].as<std::string>();
         camera_par.cameraCalibPath    = cam_yaml["cameraCalib"].as<std::string>();
         camera_par.maskFileOrientPath = cam_yaml["maskFileOrient"].as<std::string>();
+        camera_par.show               = show;
+        if (cam_yaml["tif"]) {
+            tif_map_path = cam_yaml["tif"].as<std::string>();
+        }
         break;
     }
 
+    if (!camera_par.id) {
+        std::cout << "No camera data could be found with given id " << camera_id << std::endl;
+        throw;
+    }
+
     std::cout << "Camera parameters read!" << std::endl << camera_par << std::endl;
+    std::cout << "Using TIF at " << tif_map_path << std::endl;
 
     edge::Dataset_t dataset;
     switch (n_classes) {
@@ -60,7 +72,8 @@ edge::camera prepareCamera(int camera_id, std::string &net, char &type, int &n_c
 
     edge::camera camera;
     std::cout << "Reading calibration matrix in " << camera_par.cameraCalibPath << std::endl;
-    readCalibrationMatrix(camera_par.cameraCalibPath, camera.calibMat, camera.distCoeff, camera.calibWidth, camera.calibHeight);
+    readCalibrationMatrix(camera_par.cameraCalibPath, camera.calibMat, camera.distCoeff, camera.calibWidth,
+                          camera.calibHeight);
     std::cout << "Calibration matrix read!" << std::endl << camera.calibMat << std::endl;
     std::cout << "Reading projection matrix in " << camera_par.pmatrixPath << std::endl;
     readProjectionMatrix(camera_par.pmatrixPath, camera.prjMat);
@@ -75,16 +88,28 @@ edge::camera prepareCamera(int camera_id, std::string &net, char &type, int &n_c
 
     camera.adfGeoTransform = (double *) malloc(6 * sizeof(double));
     readTiff(tif_map_path, camera.adfGeoTransform);
-    camera.geoConv.initialiseReference(44.655540, 10.934315, 0); // THIS?
+    camera.geoConv.initialiseReference(44.655540, 10.934315, 0);
     return camera;
 }
 
-char* prepareMessage(std::vector<tk::dnn::box> &box_vector, std::vector<std::tuple<float, float>> &coords, unsigned int frameAmount, unsigned int *size) {
-    *size = box_vector.size() * (sizeof(double) * 2 + sizeof(int) + 1 + sizeof(float) * 4) + 1;
+char* prepareMessage(std::vector<tk::dnn::box> &box_vector, std::vector<std::tuple<float, float>> &coords,
+                     unsigned int frameAmount, int cam_id, unsigned int *size) {
+    box_vector.erase(std::remove_if(box_vector.begin(), box_vector.end(), [](tk::dnn::box &box) {
+        return box.cl == 7 || box.cl == 8;
+    }), box_vector.end());
+    *size = box_vector.size() * (sizeof(double) * 2 + sizeof(int) + 1 + sizeof(float) * 4) + 1 + sizeof(int)
+            + sizeof(unsigned long long);
     char *data = (char *) malloc(*size);
     char *data_origin = data;
     char flag = ~0;
     memcpy(data++, &flag, 1);
+    memcpy(data, &cam_id, sizeof(int));
+    data += sizeof(int);
+    unsigned long long timestamp = getTimeMs();
+    memcpy(data, &timestamp, sizeof(unsigned long long));
+    data += sizeof(unsigned long long);
+    std::cout << "Timestamp of the snapshot is " << timestamp << " and sizeof is " << sizeof(unsigned long long)
+              << std::endl;
     /*
     char double_size = (char) sizeof(double);
     memcpy(data++, &double_size, 1);
@@ -96,13 +121,13 @@ char* prepareMessage(std::vector<tk::dnn::box> &box_vector, std::vector<std::tup
     for (int i = 0; i < box_vector.size(); i++) {
         tk::dnn::box box = box_vector[i];
         std::tuple<float, float> coord = coords[i];
-        double coord_north = std::get<0>(coord);
-        double coord_east = std::get<1>(coord);
+        double north = std::get<0>(coord);
+        double east = std::get<1>(coord);
         // double double uint char float float float float
-        // printf("%f %f %u %i %f %f %f %f\n", coord_north, coord_east, frameAmount, box.cl, box.x, box.y, box.w, box.h);
-        memcpy(data, &coord_north, sizeof(double));
+        // printf("%f %f %u %i %f %f %f %f\n", north, east, frameAmount, box.cl, box.x, box.y, box.w, box.h);
+        memcpy(data, &north, sizeof(double));
         data += sizeof(double);
-        memcpy(data, &coord_east, sizeof(double));
+        memcpy(data, &east, sizeof(double));
         data += sizeof(double);
         memcpy(data, &frameAmount, sizeof(unsigned int));
         data += sizeof(unsigned int);
@@ -122,17 +147,24 @@ char* prepareMessage(std::vector<tk::dnn::box> &box_vector, std::vector<std::tup
 }
 
 int main(int argc, char *argv[]) {
-
     std::cout<<"detection!\n";
     signal(SIGINT, sig_handler);
 
-    int camera_id = 20939;
+    bool use_socket = true;
     if (argc > 1) {
-        camera_id = atoi(argv[1]);
+        use_socket = atoi(argv[1]);
+    }
+    int camera_id = 20939;
+    if (argc > 2) {
+        camera_id = atoi(argv[2]);
     }
     std::string socketPort = "5559";
-    if(argc > 2)
-        socketPort = argv[1];
+    int argv_ref = 2;
+    if (use_socket) {
+        if (argc > ++argv_ref) {
+            socketPort = argv[argv_ref];
+        }
+    }
     /*
     std::string net = "yolo3_berkeley_fp32.rt";
     if(argc > 3)
@@ -148,23 +180,21 @@ int main(int argc, char *argv[]) {
         n_batch = atoi(argv[6]);
     */
     bool show = false;
-    if(argc > 3)
-        show = atoi(argv[3]);
-    int n_batch = 1;
-    if(argc > 4)
-        n_batch = atoi(argv[4]);
+    if(argc > ++argv_ref)
+        show = atoi(argv[argv_ref]);
 
+    int n_batch = 1;
     std::string net;
     char ntype;
     int n_classes;
 
-    edge::camera camera = prepareCamera(camera_id, net, ntype, n_classes);
+    edge::camera camera = prepareCamera(camera_id, net, ntype, n_classes, show);
 
-    if(n_batch < 1 || n_batch > 64)
+    if (n_batch < 1 || n_batch > 64)
         FatalError("Batch dim not supported");
 
-    if(!show)
-        SAVE_RESULT = true;
+    //if (!show)
+    //    SAVE_RESULT = true;
 
     double north, east;
 
@@ -211,16 +241,25 @@ int main(int argc, char *argv[]) {
     }
 
     cv::Mat frame;
-    if(show)
+    if (show) {
+        std::cout << "Opening window..." << std::endl;
         cv::namedWindow("detection", cv::WINDOW_NORMAL);
+        cv::resizeWindow("detection", 1024, 800);
+        std::cout << "Window successfully opened" << std::endl;
+    }
 
     std::vector<cv::Mat> batch_frame;
     std::vector<cv::Mat> batch_dnn_input;
 
-    zmq::context_t context(1);
     zmq::message_t unimportant_message;
-    app_socket = new zmq::socket_t(context, ZMQ_REQ);
-    app_socket->bind("tcp://0.0.0.0:" + socketPort);
+    zmq::context_t context(1);
+    if (use_socket) {
+        app_socket = new zmq::socket_t(context, ZMQ_REQ);
+        std::cout << "Connecting to tcp://0.0.0.0:" << socketPort << std::endl;
+        app_socket->bind("tcp://0.0.0.0:" + socketPort);
+    } else {
+        std::cout << "Not opening socket" << std::endl;
+    }
 
     unsigned int frameAmount = 0;
     std::vector<tk::dnn::box> box_vector;
@@ -255,35 +294,40 @@ int main(int argc, char *argv[]) {
         }
         detNN->draw(batch_frame);
 
-        // send thru socket
-        unsigned int size;
-        char *data = prepareMessage(box_vector, coords, frameAmount, &size);
-        zmq::message_t message(size);
-        memcpy(message.data(), data, size);
-        std::cout << "[" << frameAmount << "] Waiting for message..." << std::endl;
-        app_socket->send(message, 0);
-        free(data);
-        app_socket->recv(&unimportant_message);
-        box_vector.clear();
-        coords.clear();
-
         if (show) {
             for (int bi=0; bi < n_batch; ++bi) {
                 cv::imshow("detection", batch_frame[bi]);
                 cv::waitKey(1);
             }
         }
+
+        // send thru socket
+        if (use_socket) {
+            unsigned int size;
+            char *data = prepareMessage(box_vector, coords, frameAmount, camera_id, &size);
+            zmq::message_t message(size);
+            memcpy(message.data(), data, size);
+            std::cout << "[" << frameAmount << "] Waiting for message..." << std::endl;
+            app_socket->send(message, 0);
+            free(data);
+            app_socket->recv(&unimportant_message);
+        }
+        box_vector.clear();
+        coords.clear();
         /*
         if (n_batch == 1 && SAVE_RESULT)
-            resultVideo << frame;*/
+            resultVideo << frame;
+        */
 
         frameAmount += n_batch;
     }
 
     std::cout<<"detection end\n";
-    char flag = 0;
-    app_socket->send(&flag, 0);
-    app_socket->recv(&unimportant_message);
+    if (use_socket) {
+        char flag = 0;
+        app_socket->send(&flag, 0);
+        app_socket->recv(&unimportant_message);
+    }
 
     double mean = 0;
     std::cout<<COL_GREENB<<"\n\nTime stats:\n";
@@ -292,10 +336,11 @@ int main(int argc, char *argv[]) {
     for (int i=0; i<detNN->stats.size(); i++) mean += detNN->stats[i]; mean /= detNN->stats.size();
     std::cout<<"Avg: "<<mean/n_batch<<" ms\t"<<1000/(mean/n_batch)<<" FPS\n"<<COL_END;
 
-    if (app_socket->connected()) {
-        app_socket->close();
+    if (use_socket) {
+        if (app_socket->connected()) {
+            app_socket->close();
+        }
+        delete app_socket;
     }
-    delete app_socket;
-
     return 0;
 }
