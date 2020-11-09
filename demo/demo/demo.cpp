@@ -72,7 +72,8 @@ edge::camera prepareCamera(int camera_id, std::string &net, char &type, int &n_c
 
     edge::camera camera;
     std::cout << "Reading calibration matrix in " << camera_par.cameraCalibPath << std::endl;
-    readCalibrationMatrix(camera_par.cameraCalibPath, camera.calibMat, camera.distCoeff, camera.calibWidth, camera.calibHeight);
+    readCalibrationMatrix(camera_par.cameraCalibPath, camera.calibMat, camera.distCoeff, camera.calibWidth,
+                          camera.calibHeight);
     std::cout << "Calibration matrix read!" << std::endl << camera.calibMat << std::endl;
     std::cout << "Reading projection matrix in " << camera_par.pmatrixPath << std::endl;
     readProjectionMatrix(camera_par.pmatrixPath, camera.prjMat);
@@ -91,17 +92,24 @@ edge::camera prepareCamera(int camera_id, std::string &net, char &type, int &n_c
     return camera;
 }
 
-char* prepareMessage(std::vector<tk::dnn::box> &box_vector, std::vector<std::tuple<float, float>> &coords, unsigned int frameAmount, int cam_id, unsigned int *size) {
+char* prepareMessage(std::vector<tk::dnn::box> &box_vector, std::vector<std::tuple<float, float>> &coords,
+                     unsigned int frameAmount, int cam_id, unsigned int *size) {
     box_vector.erase(std::remove_if(box_vector.begin(), box_vector.end(), [](tk::dnn::box &box) {
         return box.cl == 7 || box.cl == 8;
     }), box_vector.end());
-    *size = box_vector.size() * (sizeof(double) * 2 + sizeof(int) + 1 + sizeof(float) * 4) + 1 + sizeof(int);
+    *size = box_vector.size() * (sizeof(double) * 2 + sizeof(int) + 1 + sizeof(float) * 4) + 1 + sizeof(int)
+            + sizeof(unsigned long long);
     char *data = (char *) malloc(*size);
     char *data_origin = data;
     char flag = ~0;
     memcpy(data++, &flag, 1);
     memcpy(data, &cam_id, sizeof(int));
     data += sizeof(int);
+    unsigned long long timestamp = getTimeMs();
+    memcpy(data, &timestamp, sizeof(unsigned long long));
+    data += sizeof(unsigned long long);
+    std::cout << "Timestamp of the snapshot is " << timestamp << " and sizeof is " << sizeof(unsigned long long)
+              << std::endl;
     /*
     char double_size = (char) sizeof(double);
     memcpy(data++, &double_size, 1);
@@ -157,6 +165,20 @@ int main(int argc, char *argv[]) {
             socketPort = argv[argv_ref];
         }
     }
+    /*
+    std::string net = "yolo3_berkeley_fp32.rt";
+    if(argc > 3)
+        net = argv[2];
+    char ntype = 'y';
+    if(argc > 4)
+        ntype = argv[4][0];
+    int n_classes = 80;
+    if(argc > 5)
+        n_classes = atoi(argv[5]);
+    int n_batch = 1;
+    if(argc > 6)
+        n_batch = atoi(argv[6]);
+    */
     bool show = false;
     if(argc > ++argv_ref)
         show = atoi(argv[argv_ref]);
@@ -171,7 +193,8 @@ int main(int argc, char *argv[]) {
     if (n_batch < 1 || n_batch > 64)
         FatalError("Batch dim not supported");
 
-    // if(!show) SAVE_RESULT = true;
+    //if (!show)
+    //    SAVE_RESULT = true;
 
     double north, east;
 
@@ -218,7 +241,7 @@ int main(int argc, char *argv[]) {
     }
 
     cv::Mat frame;
-    if(show) {
+    if (show) {
         std::cout << "Opening window..." << std::endl;
         cv::namedWindow("detection", cv::WINDOW_NORMAL);
         cv::resizeWindow("detection", 1024, 800);
@@ -263,9 +286,7 @@ int main(int argc, char *argv[]) {
         for (auto &box_batch : detNN->batchDetected) {
             for (auto &box : box_batch) {
                 convertCameraPixelsToMapMeters(box.x, box.y, box.cl, camera, north, east);
-                // double lat, lon;
                 // pixel2GPS(box.x, box.y, lat, lon, camera.adfGeoTransform);
-                // std::cout << "LAT: " << lat << " LON: " << lon << std::endl;
                 box_vector.push_back(box);
                 coords.push_back(std::make_tuple(north, east));
                 // printf("\t(%f,%f) converted to (%f,%f)\n", box.x, box.y, north, east);
@@ -302,7 +323,6 @@ int main(int argc, char *argv[]) {
     }
 
     std::cout<<"detection end\n";
-
     if (use_socket) {
         char flag = 0;
         app_socket->send(&flag, 0);
@@ -322,6 +342,5 @@ int main(int argc, char *argv[]) {
         }
         delete app_socket;
     }
-
     return 0;
 }
