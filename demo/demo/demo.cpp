@@ -159,15 +159,17 @@ int main(int argc, char *argv[]) {
     std::cout<<"detection!\n";
     signal(SIGINT, sig_handler);
 
+    // bool use_socket = true;
     bool use_pipe = true;
     if (argc > 1) {
         use_pipe = atoi(argv[1]);
+        // use_socket = atoi(argv[1]);
     }
     int camera_id = 20939;
     if (argc > 2) {
         camera_id = atoi(argv[2]);
     }
-    //std::string socketPort = "5559";
+    // std::string socketPort = "5559";
     int argv_ref = 2;
     if (use_pipe) {
         if (argc > ++argv_ref) {
