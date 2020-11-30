@@ -7,6 +7,8 @@
 #include <camera_elaboration.h>
 #include <configuration.h>
 #include "zmq.hpp"
+#include <sys/stat.h>
+#include <fcntl.h>
 
 #include "CenternetDetection.h"
 #include "MobilenetDetection.h"
@@ -15,12 +17,19 @@
 bool gRun;
 bool SAVE_RESULT = false;
 
-zmq::socket_t *app_socket;
+// zmq::socket_t *app_socket;
+int fifo_write;
+int fifo_read;
+char * pipePathWrite = "/tmp/pipe_yolo2COMPSs";
+char * pipePathRead = "/tmp/pipe_COMPSs2yolo";
 
 void sig_handler(int signo) {
     std::cout<<"request gateway stop\n";
     gRun = false;
-    app_socket->close();
+    // app_socket->close();
+    unlink(pipePathWrite);
+    unlink(pipePathRead);
+    FatalError("Closing application");
 }
 
 edge::camera prepareCamera(int camera_id, std::string &net, char &type, int &n_classes, bool show) {
@@ -108,8 +117,8 @@ char* prepareMessage(std::vector<tk::dnn::box> &box_vector, std::vector<std::tup
     unsigned long long timestamp = getTimeMs();
     memcpy(data, &timestamp, sizeof(unsigned long long));
     data += sizeof(unsigned long long);
-    std::cout << "Timestamp of the snapshot is " << timestamp << " and sizeof is " << sizeof(unsigned long long)
-              << std::endl;
+    /*std::cout << "Timestamp of the snapshot is " << timestamp << " and sizeof is " << sizeof(unsigned long long)
+              << std::endl; */
     /*
     char double_size = (char) sizeof(double);
     memcpy(data++, &double_size, 1);
@@ -150,19 +159,23 @@ int main(int argc, char *argv[]) {
     std::cout<<"detection!\n";
     signal(SIGINT, sig_handler);
 
-    bool use_socket = true;
+    bool use_pipe = true;
     if (argc > 1) {
-        use_socket = atoi(argv[1]);
+        use_pipe = atoi(argv[1]);
     }
     int camera_id = 20939;
     if (argc > 2) {
         camera_id = atoi(argv[2]);
     }
-    std::string socketPort = "5559";
+    //std::string socketPort = "5559";
     int argv_ref = 2;
-    if (use_socket) {
+    if (use_pipe) {
         if (argc > ++argv_ref) {
-            socketPort = argv[argv_ref];
+            // socketPort = argv[argv_ref];
+            pipePathWrite = argv[argv_ref];
+        }
+        if (argc > ++argv_ref) {
+            pipePathRead = argv[argv_ref];
         }
     }
     /*
@@ -251,14 +264,36 @@ int main(int argc, char *argv[]) {
     std::vector<cv::Mat> batch_frame;
     std::vector<cv::Mat> batch_dnn_input;
 
-    zmq::message_t unimportant_message;
-    zmq::context_t context(1);
-    if (use_socket) {
-        app_socket = new zmq::socket_t(context, ZMQ_REQ);
+    /*zmq::message_t unimportant_message;
+    zmq::context_t context(1);*/
+    if (use_pipe) {
+        /*app_socket = new zmq::socket_t(context, ZMQ_REQ);
         std::cout << "Connecting to tcp://0.0.0.0:" << socketPort << std::endl;
-        app_socket->bind("tcp://0.0.0.0:" + socketPort);
+        app_socket->bind("tcp://0.0.0.0:" + socketPort);*/
+
+        /* Check if named pipes exist and create them */
+        unlink(pipePathWrite);
+        unlink(pipePathRead);
+        if (mkfifo(pipePathWrite, 0666) < 0) {
+            perror("Error creating write pipe");
+        }
+        if (mkfifo(pipePathRead, 0666) < 0) {
+            perror("Error creating read pipe");
+        }
+
+        /*std::cout << "Opening FIFO WRITE PIPE in " << pipePathWrite << std::endl;
+        if ((fifo_write = open(pipePathWrite, O_WRONLY)) < 0) {
+            perror("Error opening write pipe");
+            FatalError("Pipe for write not opened");
+        }
+        std::cout << "Opening FIFO READ PIPE in " << pipePathRead << std::endl;
+        if ((fifo_read = open(pipePathRead, O_RDONLY)) < 0) {
+            perror("Error opening read pipe");
+            FatalError("Pipe for read not opened");
+        }*/
     } else {
-        std::cout << "Not opening socket" << std::endl;
+        // std::cout << "Not opening socket" << std::endl;
+        std::cout << "Not opening pipes" << std::endl;
     }
 
     unsigned int frameAmount = 0;
@@ -301,16 +336,40 @@ int main(int argc, char *argv[]) {
             }
         }
 
-        // send thru socket
-        if (use_socket) {
+        // send thru socket or pipe
+        if (use_pipe) {
             unsigned int size;
             char *data = prepareMessage(box_vector, coords, frameAmount, camera_id, &size);
-            zmq::message_t message(size);
+            /*zmq::message_t message(size);
             memcpy(message.data(), data, size);
             std::cout << "[" << frameAmount << "] Waiting for message..." << std::endl;
             app_socket->send(message, 0);
             free(data);
-            app_socket->recv(&unimportant_message);
+            app_socket->recv(&unimportant_message); // wait for python workflow to ack*/
+
+            std::cout << "[" << frameAmount << "] Waiting for message..." << std::endl;
+            if ((fifo_write = open(pipePathWrite, O_WRONLY)) < 0) {
+                perror("Error opening write pipe");
+                FatalError("Pipe for write not opened");
+            }
+            if ((fifo_read = open(pipePathRead, O_RDONLY)) < 0) {
+                perror("Error opening read pipe");
+                FatalError("Pipe for read not opened");
+            }
+            if (write(fifo_write, data, size) < 0) {
+                perror("Error when writing");
+            }
+            // std::cout << "AFTER WRITING from FIFO PIPE" << std::endl;
+            close(fifo_write);
+            free(data);
+
+            char buff[1];
+            // std::cout << "READING from FIFO PIPE" << std::endl;
+            if (read(fifo_read, buff, sizeof(buff)) < 0) {
+                perror("Error when reading ack");
+            }
+            // std::cout << "AFTER READING from FIFO PIPE: " << buff[0] << std::endl;
+            // close(fifo_read);
         }
         box_vector.clear();
         coords.clear();
@@ -323,10 +382,14 @@ int main(int argc, char *argv[]) {
     }
 
     std::cout<<"detection end\n";
-    if (use_socket) {
+    if (use_pipe) {
+        // sending flag to python workflow to mark the end of the video processing
         char flag = 0;
-        app_socket->send(&flag, 0);
-        app_socket->recv(&unimportant_message);
+        /*app_socket->send(&flag, 0);
+        app_socket->recv(&unimportant_message);*/
+        if (write(fifo_write, &flag, 0) < 0) {
+            perror("Error when writing");
+        }
     }
 
     double mean = 0;
@@ -336,11 +399,16 @@ int main(int argc, char *argv[]) {
     for (int i=0; i<detNN->stats.size(); i++) mean += detNN->stats[i]; mean /= detNN->stats.size();
     std::cout<<"Avg: "<<mean/n_batch<<" ms\t"<<1000/(mean/n_batch)<<" FPS\n"<<COL_END;
 
-    if (use_socket) {
-        if (app_socket->connected()) {
+    if (use_pipe) {
+        /*if (app_socket->connected()) {
             app_socket->close();
         }
-        delete app_socket;
+        delete app_socket;*/
+
+        close(fifo_write);
+        close(fifo_read);
+        unlink(pipePathWrite);
+        unlink(pipePathRead);
     }
     return 0;
 }
