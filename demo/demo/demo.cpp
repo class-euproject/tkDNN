@@ -86,7 +86,7 @@ edge::camera prepareCamera(int camera_id, std::string &net, char &type, int &n_c
     std::cout << "Calibration matrix read!" << std::endl << camera.calibMat << std::endl;
     std::cout << "Reading projection matrix in " << camera_par.pmatrixPath << std::endl;
     readProjectionMatrix(camera_par.pmatrixPath, camera.prjMat);
-    std::cout << "Projection matrix read!" << std::endl << camera.calibMat << std::endl;
+    std::cout << "Projection matrix read!" << std::endl << camera.prjMat << std::endl;
     camera.id = camera_par.id;
     camera.input = camera_par.input;
     camera.streamWidth = config["width"].as<int>();
@@ -94,6 +94,7 @@ edge::camera prepareCamera(int camera_id, std::string &net, char &type, int &n_c
     camera.show = true; // THIS SHOULD BE INPUT
     camera.invPrjMat = camera.prjMat.inv();
     camera.dataset = dataset;
+    std::cout << "Inverse Projection matrix!" << std::endl << camera.invPrjMat << std::endl;
 
     camera.adfGeoTransform = (double *) malloc(6 * sizeof(double));
     readTiff(tif_map_path, camera.adfGeoTransform);
@@ -103,9 +104,17 @@ edge::camera prepareCamera(int camera_id, std::string &net, char &type, int &n_c
 
 char* prepareMessage(std::vector<tk::dnn::box> &box_vector, std::vector<std::tuple<float, float>> &coords,
                      unsigned int frameAmount, int cam_id, unsigned int *size) {
-    box_vector.erase(std::remove_if(box_vector.begin(), box_vector.end(), [](tk::dnn::box &box) {
+    /*box_vector.erase(std::remove_if(box_vector.begin(), box_vector.end(), [](tk::dnn::box &box) {
         return box.cl == 7 || box.cl == 8;
-    }), box_vector.end());
+    }), box_vector.end()); // if traffic signs or traffic lights*/
+    for (int i = box_vector.size() - 1; i >= 0; i--) {
+        // if traffic signs or traffic lights
+        if (box_vector[i].cl == 7 || box_vector[i].cl == 8) {
+            box_vector.erase(box_vector.begin()+i);
+            coords.erase(coords.begin()+i);
+        }
+
+    }
     *size = box_vector.size() * (sizeof(double) * 2 + sizeof(int) + 1 + sizeof(float) * 4) + 1 + sizeof(int)
             + sizeof(unsigned long long);
     char *data = (char *) malloc(*size);
@@ -131,7 +140,7 @@ char* prepareMessage(std::vector<tk::dnn::box> &box_vector, std::vector<std::tup
         tk::dnn::box box = box_vector[i];
         std::tuple<float, float> coord = coords[i];
         double north = std::get<0>(coord);
-        double east = std::get<1>(coord);
+        double east = std::get<1>(coord);   
         // double double uint char float float float float
         // printf("%f %f %u %i %f %f %f %f\n", north, east, frameAmount, box.cl, box.x, box.y, box.w, box.h);
         memcpy(data, &north, sizeof(double));
