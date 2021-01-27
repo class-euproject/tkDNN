@@ -102,18 +102,19 @@ edge::camera prepareCamera(int camera_id, std::string &net, char &type, int &n_c
     return camera;
 }
 
-char* prepareMessage(std::vector<tk::dnn::box> &box_vector, std::vector<std::tuple<float, float>> &coords,
+char* prepareMessage(std::vector<tk::dnn::box> &box_vector, std::vector<std::tuple<double, double>> &coords,
                      unsigned int frameAmount, int cam_id, unsigned int *size) {
     /*box_vector.erase(std::remove_if(box_vector.begin(), box_vector.end(), [](tk::dnn::box &box) {
         return box.cl == 7 || box.cl == 8;
     }), box_vector.end()); // if traffic signs or traffic lights*/
     for (int i = box_vector.size() - 1; i >= 0; i--) {
         // if traffic signs or traffic lights
+        /*std::cout << "In removing boxes: pixel x: " << box_vector[i].x << " pixel y: " << box_vector[i].y <<
+            " north: " << std::get<0>(coords[i]) << " east: " << std::get<1>(coords[i]) << std::endl;*/
         if (box_vector[i].cl == 7 || box_vector[i].cl == 8) {
             box_vector.erase(box_vector.begin()+i);
             coords.erase(coords.begin()+i);
         }
-
     }
     *size = box_vector.size() * (sizeof(double) * 2 + sizeof(int) + 1 + sizeof(float) * 4) + 1 + sizeof(int)
             + sizeof(unsigned long long);
@@ -126,8 +127,6 @@ char* prepareMessage(std::vector<tk::dnn::box> &box_vector, std::vector<std::tup
     unsigned long long timestamp = getTimeMs();
     memcpy(data, &timestamp, sizeof(unsigned long long));
     data += sizeof(unsigned long long);
-    /*std::cout << "Timestamp of the snapshot is " << timestamp << " and sizeof is " << sizeof(unsigned long long)
-              << std::endl; */
     /*
     char double_size = (char) sizeof(double);
     memcpy(data++, &double_size, 1);
@@ -138,9 +137,9 @@ char* prepareMessage(std::vector<tk::dnn::box> &box_vector, std::vector<std::tup
      */
     for (int i = 0; i < box_vector.size(); i++) {
         tk::dnn::box box = box_vector[i];
-        std::tuple<float, float> coord = coords[i];
+        std::tuple<double, double> coord = coords[i];
         double north = std::get<0>(coord);
-        double east = std::get<1>(coord);   
+        double east = std::get<1>(coord);
         // double double uint char float float float float
         // printf("%f %f %u %i %f %f %f %f\n", north, east, frameAmount, box.cl, box.x, box.y, box.w, box.h);
         memcpy(data, &north, sizeof(double));
@@ -309,7 +308,7 @@ int main(int argc, char *argv[]) {
 
     unsigned int frameAmount = 0;
     std::vector<tk::dnn::box> box_vector;
-    std::vector<std::tuple<float, float>> coords;
+    std::vector<std::tuple<double, double>> coords;
     while(gRun) {
         batch_dnn_input.clear();
         batch_frame.clear();
