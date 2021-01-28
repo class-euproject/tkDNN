@@ -206,6 +206,10 @@ int main(int argc, char *argv[]) {
     if(argc > ++argv_ref)
         show = atoi(argv[argv_ref]);
 
+    if (argc > ++argv_ref) {
+        SAVE_RESULT = atoi(argv[argv_ref]);
+    }
+
     int n_batch = 1;
     std::string net;
     char ntype;
@@ -330,7 +334,8 @@ int main(int argc, char *argv[]) {
         detNN->update(batch_dnn_input, n_batch);
         for (auto &box_batch : detNN->batchDetected) {
             for (auto &box : box_batch) {
-                convertCameraPixelsToMapMeters(box.x, box.y, box.cl, camera, north, east);
+                // convertCameraPixelsToMapMeters(box.x, box.y, box.cl, camera, north, east); // upper left corner
+                convertCameraPixelsToMapMeters(box.x + box.w/2, box.y + box.h/2, box.cl, camera, north, east); // box center
                 // pixel2GPS(box.x, box.y, lat, lon, camera.adfGeoTransform);
                 box_vector.push_back(box);
                 coords.push_back(std::make_tuple(north, east));
@@ -383,10 +388,10 @@ int main(int argc, char *argv[]) {
         }
         box_vector.clear();
         coords.clear();
-        /*
+
         if (n_batch == 1 && SAVE_RESULT)
             resultVideo << frame;
-        */
+
 
         frameAmount += n_batch;
     }
