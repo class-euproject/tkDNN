@@ -103,7 +103,8 @@ edge::camera prepareCamera(int camera_id, std::string &net, char &type, int &n_c
 }
 
 char* prepareMessage(std::vector<tk::dnn::box> &box_vector, std::vector<std::tuple<double, double>> &coords,
-                     std::vector<std::tuple<double, double>> &coordsGeo,
+                     // std::vector<std::tuple<double, double>> &coordsGeo,
+                     std::vector<std::tuple<double, double, double, double, double, double, double, double>> &boxCoords,
                      unsigned int frameAmount, int cam_id, unsigned int *size) {
     /*box_vector.erase(std::remove_if(box_vector.begin(), box_vector.end(), [](tk::dnn::box &box) {
         return box.cl == 7 || box.cl == 8;
@@ -116,10 +117,11 @@ char* prepareMessage(std::vector<tk::dnn::box> &box_vector, std::vector<std::tup
         if (box_vector[i].cl == 7 || box_vector[i].cl == 8) {
             box_vector.erase(box_vector.begin()+i);
             coords.erase(coords.begin()+i);
-            coordsGeo.erase(coordsGeo.begin()+i);
+            //coordsGeo.erase(coordsGeo.begin()+i);
+            boxCoords.erase(boxCoords.begin()+i);
         }
     }
-    *size = box_vector.size() * (sizeof(double) * 4 + sizeof(int) + 1 + sizeof(float) * 4) + 1 + sizeof(int)
+    *size = box_vector.size() * (sizeof(double) * 10 + sizeof(int) + 1 + sizeof(float) * 4) + 1 + sizeof(int)
             + sizeof(unsigned long long);
     char *data = (char *) malloc(*size);
     char *data_origin = data;
@@ -135,19 +137,17 @@ char* prepareMessage(std::vector<tk::dnn::box> &box_vector, std::vector<std::tup
         std::tuple<double, double> coord = coords[i];
         double north = std::get<0>(coord);
         double east = std::get<1>(coord);
-        std::tuple<double, double> coordGeo = coordsGeo[i];
+        /*std::tuple<double, double> coordGeo = coordsGeo[i];
         double lat = std::get<0>(coordGeo);
-        double lon = std::get<1>(coordGeo);
-        // double double double double uint char float float float float
-        // printf("%f %f %u %i %f %f %f %f\n", north, east, frameAmount, box.cl, box.x, box.y, box.w, box.h);
+        double lon = std::get<1>(coordGeo);*/
         memcpy(data, &north, sizeof(double));
         data += sizeof(double);
         memcpy(data, &east, sizeof(double));
         data += sizeof(double);
-        memcpy(data, &lat, sizeof(double));
+        /*memcpy(data, &lat, sizeof(double));
         data += sizeof(double);
         memcpy(data, &lon, sizeof(double));
-        data += sizeof(double);
+        data += sizeof(double);*/
         memcpy(data, &frameAmount, sizeof(unsigned int));
         data += sizeof(unsigned int);
         memcpy(data, &box.cl, sizeof(char));
@@ -160,6 +160,31 @@ char* prepareMessage(std::vector<tk::dnn::box> &box_vector, std::vector<std::tup
         data += sizeof(float);
         memcpy(data, &box.h, sizeof(float));
         data += sizeof(float);
+        std::tuple<double, double, double, double, double, double, double, double> boxCoord = boxCoords[i];
+        double lat_ur = std::get<0>(boxCoord);
+        double lon_ur = std::get<1>(boxCoord);
+        double lat_lr = std::get<2>(boxCoord);
+        double lon_lr = std::get<3>(boxCoord);
+        double lat_ll = std::get<4>(boxCoord);
+        double lon_ll = std::get<5>(boxCoord);
+        double lat_ul = std::get<6>(boxCoord);
+        double lon_ul = std::get<7>(boxCoord);
+        memcpy(data, &lat_ur, sizeof(double));
+        data += sizeof(double);
+        memcpy(data, &lon_ur, sizeof(double));
+        data += sizeof(double);
+        memcpy(data, &lat_lr, sizeof(double));
+        data += sizeof(double);
+        memcpy(data, &lon_lr, sizeof(double));
+        data += sizeof(double);
+        memcpy(data, &lat_ll, sizeof(double));
+        data += sizeof(double);
+        memcpy(data, &lon_ll, sizeof(double));
+        data += sizeof(double);
+        memcpy(data, &lat_ul, sizeof(double));
+        data += sizeof(double);
+        memcpy(data, &lon_ul, sizeof(double));
+        data += sizeof(double);
     }
     // printf("\n");
     return data_origin;
@@ -313,9 +338,13 @@ int main(int argc, char *argv[]) {
     }
 
     unsigned int frameAmount = 0;
+    float scale_x   = camera.hasCalib ? camera.calibWidth  / camera.streamWidth : 1;
+    float scale_y   = camera.hasCalib ? camera.calibHeight / camera.streamHeight: 1;
     std::vector<tk::dnn::box> box_vector;
     std::vector<std::tuple<double, double>> coords;
     std::vector<std::tuple<double, double>> coordsGeo;
+    std::vector<std::tuple<double, double, double, double, double, double, double, double>> boxCoords;
+    double lat_ur, lat_lr, lat_ll, lat_ul, lon_ur, lon_lr, lon_ll, lon_ul;
     double lat, lon;
     while(gRun) {
         batch_dnn_input.clear();
@@ -338,12 +367,26 @@ int main(int argc, char *argv[]) {
         detNN->update(batch_dnn_input, n_batch);
         for (auto &box_batch : detNN->batchDetected) {
             for (auto &box : box_batch) {
-                // convertCameraPixelsToMapMeters(box.x, box.y, box.cl, camera, north, east); // upper left corner
-                convertCameraPixelsToMapMeters(box.x + box.w/2, box.y + box.h/2, box.cl, camera, north, east); // box center
-                convertCameraPixelsToGeodetic(box.x + box.w/2, box.y + box.h/2, box.cl, camera, lat, lon); // box center
+                convertCameraPixelsToMapMeters((box.x + box.w / 2)*scale_x, (box.y + box.h)*scale_y, box.cl, camera, north, east);
+                //convertCameraPixelsToMapMeters(box.x + box.w/2, box.y + box.h/2, box.cl, camera, north,
+                //                               east); // box center
+                // convertCameraPixelsToGeodetic(box.x + box.w/2, box.y + box.h/2, box.cl, camera, lat,
+                //                              lon); // box center
+                convertCameraPixelsToGeodetic(box.x + box.w, box.y, box.cl, camera, lat_ur,
+                                              lon_ur); // box upper right corner
+                convertCameraPixelsToGeodetic(box.x + box.w, box.y + box.h, box.cl, camera, lat_lr,
+                                              lon_lr); // box lower right corner
+                convertCameraPixelsToGeodetic(box.x, box.y + box.h, box.cl, camera, lat_ll,
+                                              lon_ll); // box lower left corner
+                convertCameraPixelsToGeodetic(box.x, box.y, box.cl, camera, lat_ul,
+                                              lon_ul); // box upper left corner
                 box_vector.push_back(box);
                 coords.push_back(std::make_tuple(north, east));
-                coordsGeo.push_back(std::make_tuple(lat, lon));
+                // coordsGeo.push_back(std::make_tuple(lat, lon));
+                boxCoords.push_back(std::make_tuple(lat_ur, lon_ur, lat_lr, lon_lr, lat_ll, lon_ll, lat_ul, lon_ul));
+                /*std::cout << "box.x " << box.x << "box.y " << box.y << " lat_ur " << lat_ur << " lon_ur " << lon_ur
+                    << " lat_lr " << lat_lr << " lon_lr " << lon_lr << " lat_ll " << lat_ll << " lon_ll " << lon_ll
+                    << " lat_ul " << lat_ul << " lon_ul " << lon_ul << std::endl;*/
                 // printf("\t(%f,%f) converted to (%f,%f)\n", box.x, box.y, north, east);
             }
         }
@@ -359,7 +402,8 @@ int main(int argc, char *argv[]) {
         // send thru socket or pipe
         if (use_pipe) {
             unsigned int size;
-            char *data = prepareMessage(box_vector, coords, coordsGeo, frameAmount, camera_id, &size);
+            // char *data = prepareMessage(box_vector, coords, coordsGeo, boxCoords, frameAmount, camera_id, &size);
+            char *data = prepareMessage(box_vector, coords, boxCoords, frameAmount, camera_id, &size);
             /*zmq::message_t message(size);
             memcpy(message.data(), data, size);
             std::cout << "[" << frameAmount << "] Waiting for message..." << std::endl;
@@ -394,6 +438,7 @@ int main(int argc, char *argv[]) {
         box_vector.clear();
         coords.clear();
         coordsGeo.clear();
+        boxCoords.clear();
 
         if (n_batch == 1 && SAVE_RESULT)
             resultVideo << frame;
