@@ -1,4 +1,7 @@
 # tkDNN
+
+This branch has been developed by BSC based on the tkDNN from Università di Modena e Reggio Emilia.
+
 tkDNN is a Deep Neural Network library built with cuDNN and tensorRT primitives, specifically thought to work on NVIDIA Jetson Boards. It has been tested on TK1(branch cudnn2), TX1, TX2, AGX Xavier and several discrete GPU.
 The main goal of this project is to exploit NVIDIA boards as much as possible to obtain the best inference performance. It does not allow training. 
 
@@ -80,7 +83,7 @@ When using openCV not compiled with contrib, comment the definition of OPENCV_CU
 ## How to compile this repo
 Build with cmake. If using Ubuntu 18.04 a new version of cmake is needed (3.15 or above). 
 ```
-git clone https://github.com/ceccocats/tkDNN
+git clone https://github.com/class-euproject/tkDNN/ -b bsc
 cd tkDNN
 mkdir build
 cd build
