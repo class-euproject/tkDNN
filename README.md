@@ -72,6 +72,8 @@ This branch works on every NVIDIA GPU that supports the dependencies:
 * TENSORRT 6.01
 * OPENCV 3.4
 * yaml-cpp 0.5.2 (sudo apt install libyaml-cpp-dev)
+* zmq (sudo apt install libzmq3-dev)
+* Cmake version >= 3.12
 
 ## About OpenCV
 To compile and install OpenCV4 with contrib us the script ```install_OpenCV4.sh```. It will download and compile OpenCV in Download folder.
