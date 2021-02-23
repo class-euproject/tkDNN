@@ -98,31 +98,30 @@ edge::camera prepareCamera(int camera_id, std::string &net, char &type, int &n_c
 
     camera.adfGeoTransform = (double *) malloc(6 * sizeof(double));
     readTiff(tif_map_path, camera.adfGeoTransform);
-    camera.geoConv.initialiseReference(44.655540, 10.934315, 0);
+    // camera.geoConv.initialiseReference(44.655540, 10.934315, 0);
+    std::cout << "Using following point as reference in initialiseReference in geoConv (lat: "
+        << camera.adfGeoTransform[3] << ", lon: " << camera.adfGeoTransform[0] << ")" << std::endl;
+    camera.geoConv.initialiseReference(camera.adfGeoTransform[3], camera.adfGeoTransform[0], 0);
     return camera;
 }
 
 char* prepareMessage(std::vector<tk::dnn::box> &box_vector, std::vector<std::tuple<double, double>> &coords,
                      // std::vector<std::tuple<double, double>> &coordsGeo,
                      std::vector<std::tuple<double, double, double, double, double, double, double, double>> &boxCoords,
-                     unsigned int frameAmount, int cam_id, unsigned int *size) {
+                     unsigned int frameAmount, int cam_id, double lat_init, double lon_init, unsigned int *size) {
     /*box_vector.erase(std::remove_if(box_vector.begin(), box_vector.end(), [](tk::dnn::box &box) {
         return box.cl == 7 || box.cl == 8;
     }), box_vector.end()); // if traffic signs or traffic lights*/
     for (int i = box_vector.size() - 1; i >= 0; i--) {
         // if traffic signs or traffic lights
-        /*std::cout << "In removing boxes: pixel x: " << box_vector[i].x << " pixel y: " << box_vector[i].y <<
-            " north: " << std::get<0>(coords[i]) << " east: " << std::get<1>(coords[i]) <<
-            " lat: " << std::get<0>(coordsGeo[i]) << " lon: " << std::get<1>(coordsGeo[i]) << std::endl;*/
         if (box_vector[i].cl == 7 || box_vector[i].cl == 8) {
             box_vector.erase(box_vector.begin()+i);
             coords.erase(coords.begin()+i);
-            //coordsGeo.erase(coordsGeo.begin()+i);
             boxCoords.erase(boxCoords.begin()+i);
         }
     }
     *size = box_vector.size() * (sizeof(double) * 10 + sizeof(int) + 1 + sizeof(float) * 4) + 1 + sizeof(int)
-            + sizeof(unsigned long long);
+            + sizeof(unsigned long long) + sizeof(double) * 2;
     char *data = (char *) malloc(*size);
     char *data_origin = data;
     char flag = ~0;
@@ -132,6 +131,10 @@ char* prepareMessage(std::vector<tk::dnn::box> &box_vector, std::vector<std::tup
     unsigned long long timestamp = getTimeMs();
     memcpy(data, &timestamp, sizeof(unsigned long long));
     data += sizeof(unsigned long long);
+    memcpy(data, &lat_init, sizeof(double));
+    data += sizeof(double);
+    memcpy(data, &lon_init, sizeof(double));
+    data += sizeof(double);
     for (int i = 0; i < box_vector.size(); i++) {
         tk::dnn::box box = box_vector[i];
         std::tuple<double, double> coord = coords[i];
@@ -403,7 +406,8 @@ int main(int argc, char *argv[]) {
         if (use_pipe) {
             unsigned int size;
             // char *data = prepareMessage(box_vector, coords, coordsGeo, boxCoords, frameAmount, camera_id, &size);
-            char *data = prepareMessage(box_vector, coords, boxCoords, frameAmount, camera_id, &size);
+            char *data = prepareMessage(box_vector, coords, boxCoords, frameAmount, camera_id,
+                                        camera.adfGeoTransform[3], camera.adfGeoTransform[0], &size);
             /*zmq::message_t message(size);
             memcpy(message.data(), data, size);
             std::cout << "[" << frameAmount << "] Waiting for message..." << std::endl;
