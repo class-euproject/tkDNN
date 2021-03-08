@@ -26,7 +26,9 @@ zmq::socket_t *app_socket;
 void sig_handler(int signo) {
     std::cout<<"request gateway stop\n";
     gRun = false;
-    app_socket->close();
+    if (app_socket != nullptr) {
+        app_socket->close();
+    }
     // unlink(pipePathWrite);
     // unlink(pipePathRead);
     FatalError("Closing application");
@@ -40,6 +42,8 @@ edge::camera prepareCamera(int camera_id, std::string &net, char &type, int &n_c
     type = config["type"].as<char>();
     n_classes = config["classes"].as<int>();
     std::string tif_map_path = config["tif"].as<std::string>();
+    if(config["password"])
+        password = config["password"].as<std::string>();
 
     edge::camera_params camera_par;
     for (auto && cam_yaml : cameras_yaml) {
@@ -47,9 +51,14 @@ edge::camera prepareCamera(int camera_id, std::string &net, char &type, int &n_c
         if (ref_cam_id != camera_id) continue;
         camera_par.id = ref_cam_id;
         if (cam_yaml["encrypted"].as<int>()) {
+	    if(password == "") {
+                std::cout<<"Please insert the password to decrypt the cameras input"<<std::endl;
+                std::cin>>password;
+            }
+            camera_par.input = decryptString(cam_yaml["input"].as<std::string>(), password);
             //camera_par.input = decryptString(cam_yaml["input"].as<std::string>(),);
-            std::cout << "The input file is encrypted. Throwing exception" << std::endl;
-            throw;
+            /*std::cout << "The input file is encrypted. Throwing exception" << std::endl;
+            throw;*/
         } else {
             camera_par.input = cam_yaml["input"].as<std::string>();
         }
