@@ -362,7 +362,9 @@ int main(int argc, char *argv[]) {
     std::vector<std::tuple<double, double, double, double, double, double, double, double>> boxCoords;
     double lat_ur, lat_lr, lat_ll, lat_ul, lon_ur, lon_lr, lon_ll, lon_ul;
     double lat, lon;
-    while(gRun) {
+    int iters = 0;
+    while(iters < 400) {
+	iters++;
         batch_dnn_input.clear();
         batch_frame.clear();
         
@@ -465,7 +467,7 @@ int main(int argc, char *argv[]) {
     }
 
     std::cout<<"detection end\n";
-    if (use_socket) {
+    /*if (use_socket) {
         // sending flag to python workflow to mark the end of the video processing
         char flag = 0;
         app_socket->send(&flag, 0);
@@ -473,7 +475,7 @@ int main(int argc, char *argv[]) {
         // if (write(fifo_write, &flag, 0) < 0) {
         //     perror("Error when writing");
         // }
-    }
+    }*/
 
     double mean = 0;
     std::cout<<COL_GREENB<<"\n\nTime stats:\n";
