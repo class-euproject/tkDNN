@@ -16,12 +16,9 @@
 
 bool gRun;
 bool SAVE_RESULT = false;
+int NUM_ITERS = 400;
 
 zmq::socket_t *app_socket;
-// int fifo_write;
-// int fifo_read;
-// char * pipePathWrite = "/tmp/pipe_yolo2COMPSs";
-// char * pipePathRead = "/tmp/pipe_COMPSs2yolo";
 
 void sig_handler(int signo) {
     std::cout<<"request gateway stop\n";
@@ -29,8 +26,6 @@ void sig_handler(int signo) {
     if (app_socket != nullptr) {
         app_socket->close();
     }
-    // unlink(pipePathWrite);
-    // unlink(pipePathRead);
     FatalError("Closing application");
 }
 
@@ -363,15 +358,14 @@ int main(int argc, char *argv[]) {
     double lat_ur, lat_lr, lat_ll, lat_ul, lon_ur, lon_lr, lon_ll, lon_ul;
     double lat, lon;
     int iters = 0;
-    while(iters < 400) {
-	iters++;
+    while(iters < NUM_ITERS) {
         batch_dnn_input.clear();
         batch_frame.clear();
         
         for(int bi=0; bi< n_batch; ++bi){
             cap >> frame; 
             if(!frame.data)
-                break;
+                continue;
             
             batch_frame.push_back(frame);
 
@@ -379,7 +373,7 @@ int main(int argc, char *argv[]) {
             batch_dnn_input.push_back(frame.clone());
         }
         if(!frame.data) 
-            break;
+            continue;
     
         //inference
         detNN->update(batch_dnn_input, n_batch);
@@ -464,6 +458,7 @@ int main(int argc, char *argv[]) {
 
 
         frameAmount += n_batch;
+	iters++;
     }
 
     std::cout<<"detection end\n";
@@ -489,11 +484,6 @@ int main(int argc, char *argv[]) {
             app_socket->close();
         }
         delete app_socket;
-
-        // close(fifo_write);
-        // close(fifo_read);
-        // unlink(pipePathWrite);
-        // unlink(pipePathRead);
     }
     return 0;
 }
