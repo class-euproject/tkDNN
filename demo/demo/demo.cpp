@@ -1,4 +1,4 @@
-#include <iostream>
+einclude <iostream>
 #include <csignal>
 #include <stdlib.h>     /* srand, rand */
 #include <mutex>
@@ -9,6 +9,7 @@
 #include "zmq.hpp"
 #include <sys/stat.h>
 #include <fcntl.h>
+#include <unistd.h>
 
 #include "CenternetDetection.h"
 #include "MobilenetDetection.h"
@@ -369,6 +370,8 @@ int main(int argc, char *argv[]) {
             //if(!frame.data)
 	    if (!retval) {
 		std::cout << "Error when reading frame from stream. Retrying." << std::endl;
+		usleep(1000000);
+                cap.open(data->input);
                 continue;
 	    }
             
@@ -379,6 +382,8 @@ int main(int argc, char *argv[]) {
         }
         if(!retval) { 
 	    std::cout << "Error when reading frame from stream. Retrying." << std::endl;
+	    usleep(1000000);
+            cap.open(data->input);
             continue;
 	}
     
