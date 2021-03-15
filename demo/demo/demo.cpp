@@ -290,7 +290,7 @@ int main(int argc, char *argv[]) {
     gRun = true;
 
     std::cout << "Opening VideoCapture for input " << camera.input << std::endl;
-    cv::VideoCapture cap(camera.input);
+    cv::VideoCapture cap(camera.input, cv::CAP_FFMPEG);
     if(!cap.isOpened()) {
         std::cout << "Camera could not be started." << std::endl;
         exit(1);
@@ -358,22 +358,29 @@ int main(int argc, char *argv[]) {
     double lat_ur, lat_lr, lat_ll, lat_ul, lon_ur, lon_lr, lon_ll, lon_ul;
     double lat, lon;
     int iters = 0;
+    bool retval = true;
     while(iters < NUM_ITERS) {
         batch_dnn_input.clear();
         batch_frame.clear();
         
         for(int bi=0; bi< n_batch; ++bi){
-            cap >> frame; 
-            if(!frame.data)
+            //cap >> frame; 
+	    retval = cap.read(frame);
+            //if(!frame.data)
+	    if (!retval) {
+		std::cout << "Error when reading frame from stream. Retrying." << std::endl;
                 continue;
+	    }
             
             batch_frame.push_back(frame);
 
             // this will be resized to the net format
             batch_dnn_input.push_back(frame.clone());
         }
-        if(!frame.data) 
+        if(!retval) { 
+	    std::cout << "Error when reading frame from stream. Retrying." << std::endl;
             continue;
+	}
     
         //inference
         detNN->update(batch_dnn_input, n_batch);
