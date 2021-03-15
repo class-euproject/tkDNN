@@ -371,7 +371,7 @@ int main(int argc, char *argv[]) {
 	    if (!retval) {
 		std::cout << "Error when reading frame from stream. Retrying." << std::endl;
 		usleep(1000000);
-                cap.open(data->input);
+                cap.open(camera.input);
                 continue;
 	    }
             
@@ -383,7 +383,7 @@ int main(int argc, char *argv[]) {
         if(!retval) { 
 	    std::cout << "Error when reading frame from stream. Retrying." << std::endl;
 	    usleep(1000000);
-            cap.open(data->input);
+            cap.open(camera.input);
             continue;
 	}
     
