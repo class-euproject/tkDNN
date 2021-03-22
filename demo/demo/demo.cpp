@@ -115,9 +115,6 @@ char* prepareMessage(std::vector<tk::dnn::box> &box_vector, std::vector<std::tup
     }), box_vector.end()); // if traffic signs or traffic lights*/
     for (int i = box_vector.size() - 1; i >= 0; i--) {
         // if traffic signs or traffic lights
-        /*std::cout << "In removing boxes: pixel x: " << box_vector[i].x << " pixel y: " << box_vector[i].y <<
-            " north: " << std::get<0>(coords[i]) << " east: " << std::get<1>(coords[i]) <<
-            " lat: " << std::get<0>(coordsGeo[i]) << " lon: " << std::get<1>(coordsGeo[i]) << std::endl;*/
         if (box_vector[i].cl == 7 || box_vector[i].cl == 8) {
             box_vector.erase(box_vector.begin()+i);
             coords.erase(coords.begin()+i);
@@ -320,9 +317,13 @@ int main(int argc, char *argv[]) {
     int clientsize = sizeof(clientaddr);
 
     if (use_socket) {
-//         app_socket = new zmq::socket_t(context, ZMQ_REQ);
-         std::cout << "Connecting to udp://127.0.0.1:" << socketPort << std::endl;
-//         app_socket->bind("tcp://0.0.0.0:" + socketPort);				//
+        std::cout << "Connecting to tcp://127.0.0.1:" << socketPort << " waiting for COMPSs ack to start" << std::endl;
+        zmq::socket_t *app_socket = new zmq::socket_t(context, ZMQ_REP);
+        app_socket->bind("tcp://0.0.0.0:" + socketPort);
+        app_socket->recv(&unimportant_message); // wait for python workflow to ack to start processing frames
+        app_socket->close();
+
+        std::cout << "Connecting to udp://127.0.0.1:" << socketPort << std::endl;
 
 		// Creating socket file descriptor  
 		if ((sockfd = socket(AF_INET, SOCK_DGRAM, 0)) < 0) {
@@ -395,9 +396,6 @@ int main(int argc, char *argv[]) {
                 coords.push_back(std::make_tuple(north, east));
                 // coordsGeo.push_back(std::make_tuple(lat, lon));
                 boxCoords.push_back(std::make_tuple(lat_ur, lon_ur, lat_lr, lon_lr, lat_ll, lon_ll, lat_ul, lon_ul));
-                /*std::cout << "box.x " << box.x << "box.y " << box.y << " lat_ur " << lat_ur << " lon_ur " << lon_ur
-                    << " lat_lr " << lat_lr << " lon_lr " << lon_lr << " lat_ll " << lat_ll << " lon_ll " << lon_ll
-                    << " lat_ul " << lat_ul << " lon_ul " << lon_ul << std::endl;*/
                 // printf("\t(%f,%f) converted to (%f,%f)\n", box.x, box.y, north, east);
             }
         }
@@ -458,22 +456,16 @@ int main(int argc, char *argv[]) {
     if (use_socket) {
         // sending flag to python workflow to mark the end of the video processing
         char flag = 0;
-//         app_socket->send(&flag, 0);				//
-//         app_socket->recv(&unimportant_message);
+        // app_socket->send(&flag, 0);				//
+        // app_socket->recv(&unimportant_message);
 
  		char recvBuffer[1024];
 		int n;
         socklen_t len;
 
-        sendto(sockfd, &flag, sizeof(flag),
-            0, (const struct sockaddr *) &servaddr,
-            sizeof(servaddr));
-        n = recvfrom(sockfd, (char *)recvBuffer, 1024,
-            MSG_WAITALL, (struct sockaddr *) &servaddr,
-            &len);
+        sendto(sockfd, &flag, sizeof(flag), 0, (const struct sockaddr *) &servaddr, sizeof(servaddr));
+        n = recvfrom(sockfd, (char *)recvBuffer, 1024, MSG_WAITALL, (struct sockaddr *) &servaddr, &len);
         recvBuffer[n] = '\0';
-
-           
     }
 
     double mean = 0;
