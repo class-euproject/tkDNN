@@ -23,14 +23,14 @@ bool SAVE_RESULT = false;
 
 #define PORT 5559
 //zmq::socket_t *app_socket;	//
-int sockfd;
+int sockfd = -1;
 
 void sig_handler(int signo) {
     std::cout<<"request gateway stop\n";
     gRun = false;
-	
-	close(sockfd); //closesocket(sockfd); //
-//    app_socket->close();					//	
+    if (sockfd != -1) {
+        close(sockfd); //closesocket(sockfd); //
+    }
     FatalError("Closing application");
 }
 
@@ -42,6 +42,9 @@ edge::camera prepareCamera(int camera_id, std::string &net, char &type, int &n_c
     type = config["type"].as<char>();
     n_classes = config["classes"].as<int>();
     std::string tif_map_path = config["tif"].as<std::string>();
+    std::string password = "";
+    if(config["password"])
+        password = config["password"].as<std::string>();
 
     edge::camera_params camera_par;
     for (auto && cam_yaml : cameras_yaml) {
@@ -50,8 +53,13 @@ edge::camera prepareCamera(int camera_id, std::string &net, char &type, int &n_c
         camera_par.id = ref_cam_id;
         if (cam_yaml["encrypted"].as<int>()) {
             //camera_par.input = decryptString(cam_yaml["input"].as<std::string>(),);
-            std::cout << "The input file is encrypted. Throwing exception" << std::endl;
-            throw;
+            if(password == "") {
+                std::cout<<"Please insert the password to decrypt the cameras input"<<std::endl;
+                std::cin>>password;
+            }
+            camera_par.input = decryptString(cam_yaml["input"].as<std::string>(), password);
+            /*std::cout << "The input file is encrypted. Throwing exception" << std::endl;
+            throw;*/
         } else {
             camera_par.input = cam_yaml["input"].as<std::string>();
         }
@@ -216,7 +224,7 @@ int main(int argc, char *argv[]) {
     if (use_socket) {
         if (argc > ++argv_ref) {
             socketPort = argv[argv_ref];
-
+            port = atoi(argv[argv_ref]);
         }
     
     }
@@ -234,6 +242,13 @@ int main(int argc, char *argv[]) {
     if(argc > 6)
         n_batch = atoi(argv[6]);
     */
+    int num_iters = -1;
+    bool limitedIters = false;
+    if (argc > ++argv_ref) {
+        num_iters = atoi(argv[argv_ref]);
+        limitedIters = (num_iters != -1);
+    }
+
     bool show = false;
     if(argc > ++argv_ref)
         show = atoi(argv[argv_ref]);
@@ -284,7 +299,7 @@ int main(int argc, char *argv[]) {
     gRun = true;
 
     std::cout << "Opening VideoCapture for input " << camera.input << std::endl;
-    cv::VideoCapture cap(camera.input);
+    cv::VideoCapture cap(camera.input, cv::CAP_FFMPEG);
     if(!cap.isOpened()) {
         std::cout << "Camera could not be started." << std::endl;
         exit(1);
@@ -322,6 +337,7 @@ int main(int argc, char *argv[]) {
         app_socket->bind("tcp://0.0.0.0:" + socketPort);
         app_socket->recv(&unimportant_message); // wait for python workflow to ack to start processing frames
         app_socket->close();
+        delete app_socket;
 
         std::cout << "Connecting to udp://127.0.0.1:" << socketPort << std::endl;
 
@@ -332,9 +348,8 @@ int main(int argc, char *argv[]) {
 		}	
 
 		memset(&servaddr, 0, sizeof(servaddr));
-
 		servaddr.sin_family = AF_INET;
-		servaddr.sin_port = htons(PORT); //socketPort
+		servaddr.sin_port = htons(port); //socketPort
 		servaddr.sin_addr.s_addr = inet_addr("127.0.0.1");
 
         // if (bind(sockfd, (struct sockaddr *)&servaddr, sizeof(servaddr)) < 0)
@@ -346,7 +361,6 @@ int main(int argc, char *argv[]) {
         
     } else {
         std::cout << "Not opening socket" << std::endl;
-        // std::cout << "Not opening pipes" << std::endl;
     }
 
     unsigned int frameAmount = 0;
@@ -357,24 +371,36 @@ int main(int argc, char *argv[]) {
     std::vector<std::tuple<double, double>> coordsGeo;
     std::vector<std::tuple<double, double, double, double, double, double, double, double>> boxCoords;
     double lat_ur, lat_lr, lat_ll, lat_ul, lon_ur, lon_lr, lon_ll, lon_ul;
-    double lat, lon;
-    while(gRun) {
+    int iters = 0;
+    bool retval = true;
+    // while(gRun) {
+    while(not limitedIters or iters < num_iters) {
         batch_dnn_input.clear();
         batch_frame.clear();
         
         for(int bi=0; bi< n_batch; ++bi){
-            cap >> frame; 
-            if(!frame.data)
-                break;
+            // cap >> frame;
+            retval = cap.read(frame);
+            // if(!frame.data)
+            if (!retval) {
+                std::cout << "Error when reading frame from stream. Retrying." << std::endl;
+                // usleep(1000000);
+                cap.open(camera.input);
+                continue;
+            }
             
             batch_frame.push_back(frame);
 
             // this will be resized to the net format
             batch_dnn_input.push_back(frame.clone());
         }
-        if(!frame.data) 
-            break;
-    
+        if(!retval) {
+            std::cout << "Error when reading frame from stream. Retrying." << std::endl;
+            // usleep(1000000);
+            cap.open(camera.input);
+            continue;
+        }
+
         //inference
         detNN->update(batch_dnn_input, n_batch);
         for (auto &box_batch : detNN->batchDetected) {
@@ -450,6 +476,7 @@ int main(int argc, char *argv[]) {
 
 
         frameAmount += n_batch;
+        iters++;
     }
 
     std::cout<<"detection end\n";
