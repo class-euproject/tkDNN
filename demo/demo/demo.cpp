@@ -328,36 +328,36 @@ int main(int argc, char *argv[]) {
     zmq::message_t unimportant_message;
     zmq::context_t context(1);
 
-    struct sockaddr_in servaddr, clientaddr;
-    int clientsize = sizeof(clientaddr);
+    struct sockaddr_in servaddr;
 
     if (use_socket) {
-        std::cout << "Connecting to tcp://127.0.0.1:" << socketPort << " waiting for COMPSs ack to start" << std::endl;
+        std::cout << "Listening to tcp://0.0.0.0:" << socketPort << " waiting for COMPSs ack to start" << std::endl;
         zmq::socket_t *app_socket = new zmq::socket_t(context, ZMQ_REP);
         app_socket->bind("tcp://0.0.0.0:" + socketPort);
         app_socket->recv(&unimportant_message); // wait for python workflow to ack to start processing frames
         app_socket->close();
         delete app_socket;
 
-        std::cout << "Connecting to udp://127.0.0.1:" << socketPort << std::endl;
+        std::cout << "Listening to udp in://0.0.0.0:" << socketPort << std::endl;
 
-		// Creating socket file descriptor  
-		if ((sockfd = socket(AF_INET, SOCK_DGRAM, 0)) < 0) {
-			perror("socket creation failed");
-			exit(EXIT_FAILURE);
-		}	
+	// Creating socket file descriptor
+	if ((sockfd = socket(AF_INET, SOCK_DGRAM, 0)) < 0) {
+		perror("socket creation failed");
+		exit(EXIT_FAILURE);
+	}
 
-		memset(&servaddr, 0, sizeof(servaddr));
-		servaddr.sin_family = AF_INET;
-		servaddr.sin_port = htons(port); //socketPort
-		servaddr.sin_addr.s_addr = inet_addr("127.0.0.1");
+	servaddr.sin_family = AF_INET;
+	servaddr.sin_port = htons(port); //socketPort
+	servaddr.sin_addr.s_addr = INADDR_ANY;
 
-        // if (bind(sockfd, (struct sockaddr *)&servaddr, sizeof(servaddr)) < 0)
-        //     {
-        //         std::cout << "Failed to bind socket! " << strerror(errno) << "\n";
-        //         return 1;
-        //     }
-        connect(sockfd, (struct sockaddr *) &servaddr, sizeof(servaddr));
+        if (bind(sockfd, (struct sockaddr *)&servaddr, sizeof(servaddr)) < 0)
+             {
+                 std::cout << "Failed to bind socket! " << strerror(errno) << "\n";
+                 return 1;
+             }
+
+	std::cout << port << std::endl;
+        //connect(sockfd, (struct sockaddr *) &servaddr, sizeof(servaddr));
         
     } else {
         std::cout << "Not opening socket" << std::endl;
@@ -439,31 +439,42 @@ int main(int argc, char *argv[]) {
             unsigned int size;
             // char *data = prepareMessage(box_vector, coords, coordsGeo, boxCoords, frameAmount, camera_id, &size);
             
-			char *data = prepareMessage(box_vector, coords, boxCoords, frameAmount, camera_id, 
-					camera.adfGeoTransform[3], camera.adfGeoTransform[0], &size);
-//             zmq::message_t message(size);
-//             memcpy(message.data(), data, size);
-            std::cout << "[" << frameAmount << "] Waiting for message..." << std::endl;
-//             app_socket->send(message, 0);
-//             free(data);
-//             app_socket->recv(&unimportant_message); // wait for python workflow to ack 
-			
-			char sendMsg[128] = "Send from client"; //
-			char recvBuffer[1024];
-			int n;
-            socklen_t len;
-            int nSent;
+	    char *data = prepareMessage(box_vector, coords, boxCoords, frameAmount, camera_id, 
+	    camera.adfGeoTransform[3], camera.adfGeoTransform[0], &size);
 
-            sendto(sockfd, (const char *)data, size,
-                MSG_DONTWAIT, (const struct sockaddr *) &servaddr,
-                sizeof(servaddr));
+
+            std::cout << "[" << frameAmount << "] Processing frame..." << std::endl;
+
+	    char clientname[1024] = "";
+	    struct sockaddr_in clientaddr = sockaddr_in();
+	    socklen_t len = sizeof(clientaddr);
+
+            inet_ntop(AF_INET,&clientaddr.sin_addr,clientname,sizeof(clientname));
+	    std::string client_ip_str(clientname);
+
+	    std::cout << "Client ip address: " << client_ip_str << std::endl;
+
+	    char buffer_recv[1024];
+            int recv_error = recvfrom(sockfd, buffer_recv, 1024,
+                MSG_DONTWAIT, ( struct sockaddr *) &clientaddr,
+                &len);
+
+            inet_ntop(AF_INET,&clientaddr.sin_addr,clientname,sizeof(clientname));
+            client_ip_str = std::string(clientname);
+
+	    std::cout << "Client ip address after readfrom: " << client_ip_str << std::endl;
+
+	    if (client_ip_str != "0.0.0.0"){
+		std::cout << "Sending data to " << client_ip_str << std::endl;
+            	sendto(sockfd, (const char *)data, size,MSG_DONTWAIT, (const struct sockaddr *) &clientaddr,sizeof(clientaddr));
+            }
 
             free(data); 
      
-            n = recvfrom(sockfd, (char *)recvBuffer, 1024, MSG_WAITALL,
-                 (struct sockaddr *) &servaddr,
-                   &len);
-            recvBuffer[n] = '\0';
+            //n = recvfrom(sockfd, (char *)recvBuffer, 1024, MSG_WAITALL,
+            //     (struct sockaddr *) &servaddr,
+            //       &len);
+            //ecvBuffer[n] = '\0';
 
         }
         box_vector.clear();
@@ -480,7 +491,7 @@ int main(int argc, char *argv[]) {
     }
 
     std::cout<<"detection end\n";
-    if (use_socket) {
+    /*if (use_socket) {
         // sending flag to python workflow to mark the end of the video processing
         char flag = 0;
         // app_socket->send(&flag, 0);				//
@@ -493,7 +504,7 @@ int main(int argc, char *argv[]) {
         sendto(sockfd, &flag, sizeof(flag), 0, (const struct sockaddr *) &servaddr, sizeof(servaddr));
         n = recvfrom(sockfd, (char *)recvBuffer, 1024, MSG_WAITALL, (struct sockaddr *) &servaddr, &len);
         recvBuffer[n] = '\0';
-    }
+    }*/
 
     double mean = 0;
     std::cout<<COL_GREENB<<"\n\nTime stats:\n";
@@ -512,3 +523,4 @@ int main(int argc, char *argv[]) {
     }
     return 0;
 }
+
