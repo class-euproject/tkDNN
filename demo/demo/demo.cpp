@@ -401,6 +401,10 @@ int main(int argc, char *argv[]) {
             continue;
         }
 
+	// store frame into result without boxes in it
+	if (n_batch == 1 && SAVE_RESULT)
+            resultVideo << frame;
+
         //inference
         detNN->update(batch_dnn_input, n_batch);
         for (auto &box_batch : detNN->batchDetected) {
@@ -482,8 +486,8 @@ int main(int argc, char *argv[]) {
         coordsGeo.clear();
         boxCoords.clear();
 
-        if (n_batch == 1 && SAVE_RESULT)
-            resultVideo << frame;
+        /* if (n_batch == 1 && SAVE_RESULT)
+            resultVideo << frame; */
 
 
         frameAmount += n_batch;
