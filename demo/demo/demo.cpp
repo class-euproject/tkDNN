@@ -401,10 +401,6 @@ int main(int argc, char *argv[]) {
             continue;
         }
 
-	// store frame into result without boxes in it
-	if (n_batch == 1 && SAVE_RESULT)
-            resultVideo << frame;
-
         //inference
         detNN->update(batch_dnn_input, n_batch);
         for (auto &box_batch : detNN->batchDetected) {
@@ -429,36 +425,29 @@ int main(int argc, char *argv[]) {
                 // printf("\t(%f,%f) converted to (%f,%f)\n", box.x, box.y, north, east);
             }
         }
-        detNN->draw(batch_frame);
 
-        if (show) {
-            for (int bi=0; bi < n_batch; ++bi) {
-                cv::imshow("detection", batch_frame[bi]);
-                cv::waitKey(1);
-            }
-        }
 
         // send thru socket or pipe
         if (use_socket) {
             unsigned int size;
             // char *data = prepareMessage(box_vector, coords, coordsGeo, boxCoords, frameAmount, camera_id, &size);
             
-	    char *data = prepareMessage(box_vector, coords, boxCoords, frameAmount, camera_id, 
-	    camera.adfGeoTransform[3], camera.adfGeoTransform[0], &size);
+	        char *data = prepareMessage(box_vector, coords, boxCoords, frameAmount, camera_id,
+	        camera.adfGeoTransform[3], camera.adfGeoTransform[0], &size);
 
 
             std::cout << "[" << frameAmount << "] Processing frame..." << std::endl;
 
-	    char clientname[1024] = "";
-	    struct sockaddr_in clientaddr = sockaddr_in();
-	    socklen_t len = sizeof(clientaddr);
+	        char clientname[1024] = "";
+	        struct sockaddr_in clientaddr = sockaddr_in();
+	        socklen_t len = sizeof(clientaddr);
 
             inet_ntop(AF_INET,&clientaddr.sin_addr,clientname,sizeof(clientname));
-	    std::string client_ip_str(clientname);
+	        std::string client_ip_str(clientname);
 
-	    std::cout << "Client ip address: " << client_ip_str << std::endl;
+	        std::cout << "Client ip address: " << client_ip_str << std::endl;
 
-	    char buffer_recv[1024];
+	        char buffer_recv[1024];
             int recv_error = recvfrom(sockfd, buffer_recv, 1024,
                 MSG_DONTWAIT, ( struct sockaddr *) &clientaddr,
                 &len);
@@ -466,10 +455,10 @@ int main(int argc, char *argv[]) {
             inet_ntop(AF_INET,&clientaddr.sin_addr,clientname,sizeof(clientname));
             client_ip_str = std::string(clientname);
 
-	    std::cout << "Client ip address after readfrom: " << client_ip_str << std::endl;
+	        std::cout << "Client ip address after readfrom: " << client_ip_str << std::endl;
 
-	    if (client_ip_str != "0.0.0.0"){
-		std::cout << "Sending data to " << client_ip_str << std::endl;
+	        if (client_ip_str != "0.0.0.0"){
+		        std::cout << "Sending data to " << client_ip_str << std::endl;
             	sendto(sockfd, (const char *)data, size,MSG_DONTWAIT, (const struct sockaddr *) &clientaddr,sizeof(clientaddr));
             }
 
@@ -486,9 +475,17 @@ int main(int argc, char *argv[]) {
         coordsGeo.clear();
         boxCoords.clear();
 
-        /* if (n_batch == 1 && SAVE_RESULT)
-            resultVideo << frame; */
+        if (n_batch == 1 && SAVE_RESULT)
+            resultVideo << frame;
 
+        detNN->draw(batch_frame);
+
+        if (show) {
+            for (int bi=0; bi < n_batch; ++bi) {
+                cv::imshow("detection", batch_frame[bi]);
+                cv::waitKey(1);
+            }
+        }
 
         frameAmount += n_batch;
         iters++;
