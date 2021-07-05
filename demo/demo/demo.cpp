@@ -21,17 +21,75 @@
 bool gRun;
 bool SAVE_RESULT = false;
 
+edge::camera camera;
+bool limitedIters;
+int num_iters;
+int iters;
+cv::VideoCapture cap;
+struct video_cap_data
+{
+    char* input         = nullptr;
+    cv::Mat frame;
+    uint64_t tStampMs;
+    std::mutex mtxF;
+    int width           = 0;
+    int height          = 0;
+    int camId           = 0;
+    bool frameConsumed  = false;
+};
+
 #define PORT 5559
-//zmq::socket_t *app_socket;	//
 int sockfd = -1;
 
 void sig_handler(int signo) {
     std::cout<<"request gateway stop\n";
     gRun = false;
     if (sockfd != -1) {
-        close(sockfd); //closesocket(sockfd); //
+        close(sockfd);
     }
     FatalError("Closing application");
+}
+
+void *readVideoCapture( void *ptr )
+{
+    video_cap_data* data = (video_cap_data*) ptr;
+    const int new_width     = data->width;
+    const int new_height    = data->height;
+    cv::Mat frame, resized_frame;
+    cv::VideoCapture cap(camera.input, cv::CAP_FFMPEG);
+    if(!cap.isOpened()) {
+        std::cout << "Camera could not be started." << std::endl;
+        exit(1);
+    } else {
+        std::cout << "Camera started" << std::endl;
+    }
+    cv::VideoWriter result_video;
+    bool record = true;
+    if (record){
+        int w = cap.get(cv::CAP_PROP_FRAME_WIDTH);
+        int h = cap.get(cv::CAP_PROP_FRAME_HEIGHT);
+        result_video.open("video_cam_"+std::to_string(data->camId)+".mp4", cv::VideoWriter::fourcc('M','P','4','V'), 30, cv::Size(w, h));
+    }
+    bool retval;
+    while(not limitedIters or iters < num_iters) {
+        if(!data->frameConsumed) {
+            usleep(1000);
+            continue;
+        }
+        retval = cap.read(frame);
+        if (!retval) {
+            std::cout << "Error when reading frame from stream. Retrying." << std::endl;
+            cap.open(camera.input);
+            continue;
+        }
+        // resizing the image to 960x540 (the DNN takes in input 544x320)
+        cv::resize (frame, resized_frame, cv::Size(new_width, new_height));
+        data->mtxF.lock();
+        data->frame         = resized_frame.clone();
+        data->frameConsumed = false;
+        data->mtxF.unlock();
+        result_video << frame;
+    }
 }
 
 edge::camera prepareCamera(int camera_id, std::string &net, char &type, int &n_classes, bool show) {
@@ -52,7 +110,6 @@ edge::camera prepareCamera(int camera_id, std::string &net, char &type, int &n_c
         if (ref_cam_id != camera_id) continue;
         camera_par.id = ref_cam_id;
         if (cam_yaml["encrypted"].as<int>()) {
-            //camera_par.input = decryptString(cam_yaml["input"].as<std::string>(),);
             if(password == "") {
                 std::cout<<"Please insert the password to decrypt the cameras input"<<std::endl;
                 std::cin>>password;
@@ -62,6 +119,12 @@ edge::camera prepareCamera(int camera_id, std::string &net, char &type, int &n_c
             throw;*/
         } else {
             camera_par.input = cam_yaml["input"].as<std::string>();
+        }
+        if(cam_yaml["resolution"]) {
+            camera_par.resolution  = cam_yaml["resolution"].as<std::string>();
+            // here we append some parameters to the rtsp string
+            if(!camera_par.resolution.empty())
+                camera_par.input   = camera_par.input+"?resolution="+camera_par.resolution;
         }
         camera_par.pmatrixPath        = cam_yaml["pmatrix"].as<std::string>();
         camera_par.maskfilePath       = cam_yaml["maskfile"].as<std::string>();
@@ -101,7 +164,8 @@ edge::camera prepareCamera(int camera_id, std::string &net, char &type, int &n_c
     camera.input = camera_par.input;
     camera.streamWidth = config["width"].as<int>();
     camera.streamHeight = config["height"].as<int>();
-    camera.show = true; // THIS SHOULD BE INPUT
+    camera.show = true;
+    camera.hasCalib = true;
     camera.invPrjMat = camera.prjMat.inv();
     camera.dataset = dataset;
     std::cout << "Inverse Projection matrix!" << std::endl << camera.invPrjMat << std::endl;
@@ -117,7 +181,8 @@ edge::camera prepareCamera(int camera_id, std::string &net, char &type, int &n_c
 char* prepareMessage(std::vector<tk::dnn::box> &box_vector, std::vector<std::tuple<double, double>> &coords,
                      // std::vector<std::tuple<double, double>> &coordsGeo,
                      std::vector<std::tuple<double, double, double, double, double, double, double, double>> &boxCoords,
-                     unsigned int frameAmount, int cam_id, double lat_init, double lon_init, unsigned int *size) {
+                     unsigned int frameAmount, int cam_id, double lat_init, double lon_init, unsigned int *size,
+                     float scale_x, float scale_y) {
     /*box_vector.erase(std::remove_if(box_vector.begin(), box_vector.end(), [](tk::dnn::box &box) {
         return box.cl == 7 || box.cl == 8;
     }), box_vector.end()); // if traffic signs or traffic lights*/
@@ -145,6 +210,7 @@ char* prepareMessage(std::vector<tk::dnn::box> &box_vector, std::vector<std::tup
     data += sizeof(double);
     memcpy(data, &lon_init, sizeof(double));
     data += sizeof(double);
+    float box_x, box_y, box_w, box_h;
     for (int i = 0; i < box_vector.size(); i++) {
         tk::dnn::box box = box_vector[i];
         std::tuple<double, double> coord = coords[i];
@@ -165,13 +231,17 @@ char* prepareMessage(std::vector<tk::dnn::box> &box_vector, std::vector<std::tup
         data += sizeof(unsigned int);
         memcpy(data, &box.cl, sizeof(char));
         data += sizeof(char);
-        memcpy(data, &box.x, sizeof(float));
+        box_x = box.x * scale_x;
+        memcpy(data, &box_x, sizeof(float));
         data += sizeof(float);
-        memcpy(data, &box.y, sizeof(float));
+        box_y = box.y * scale_y;
+        memcpy(data, &box_y, sizeof(float));
         data += sizeof(float);
-        memcpy(data, &box.w, sizeof(float));
+        box_w = box.w * scale_x;
+        memcpy(data, &box_w, sizeof(float));
         data += sizeof(float);
-        memcpy(data, &box.h, sizeof(float));
+        box_h = box.h * scale_y;
+        memcpy(data, &box_h, sizeof(float));
         data += sizeof(float);
         std::tuple<double, double, double, double, double, double, double, double> boxCoord = boxCoords[i];
         double lat_ur = std::get<0>(boxCoord);
@@ -199,7 +269,6 @@ char* prepareMessage(std::vector<tk::dnn::box> &box_vector, std::vector<std::tup
         memcpy(data, &lon_ul, sizeof(double));
         data += sizeof(double);
     }
-    // printf("\n");
     return data_origin;
 }
 
@@ -208,9 +277,7 @@ int main(int argc, char *argv[]) {
     signal(SIGINT, sig_handler);
 
     bool use_socket = true;
-    // bool use_pipe = true;
     if (argc > 1) {
-        // use_pipe = atoi(argv[1]);
         use_socket = atoi(argv[1]);
     }
     int camera_id = 20939;
@@ -218,7 +285,7 @@ int main(int argc, char *argv[]) {
         camera_id = atoi(argv[2]);
     }
     std::string socketPort = "5559";
-	int port = 5559;				//
+	int port = 5559;
 
     int argv_ref = 2;
     if (use_socket) {
@@ -228,22 +295,9 @@ int main(int argc, char *argv[]) {
         }
     
     }
-    /*
-    std::string net = "yolo3_berkeley_fp32.rt";
-    if(argc > 3)
-        net = argv[2];
-    char ntype = 'y';
-    if(argc > 4)
-        ntype = argv[4][0];
-    int n_classes = 80;
-    if(argc > 5)
-        n_classes = atoi(argv[5]);
-    int n_batch = 1;
-    if(argc > 6)
-        n_batch = atoi(argv[6]);
-    */
-    int num_iters = -1;
-    bool limitedIters = false;
+
+    num_iters = -1;
+    limitedIters = false;
     if (argc > ++argv_ref) {
         num_iters = atoi(argv[argv_ref]);
         limitedIters = (num_iters != -1);
@@ -262,13 +316,10 @@ int main(int argc, char *argv[]) {
     char ntype;
     int n_classes;
 
-    edge::camera camera = prepareCamera(camera_id, net, ntype, n_classes, show);
+    camera = prepareCamera(camera_id, net, ntype, n_classes, show);
 
     if (n_batch < 1 || n_batch > 64)
         FatalError("Batch dim not supported");
-
-    //if (!show)
-    //    SAVE_RESULT = true;
 
     double north, east;
 
@@ -299,20 +350,6 @@ int main(int argc, char *argv[]) {
     gRun = true;
 
     std::cout << "Opening VideoCapture for input " << camera.input << std::endl;
-    cv::VideoCapture cap(camera.input, cv::CAP_FFMPEG);
-    if(!cap.isOpened()) {
-        std::cout << "Camera could not be started." << std::endl;
-        exit(1);
-    } else {
-        std::cout << "Camera started" << std::endl;
-    }
-
-    cv::VideoWriter resultVideo;
-    if(SAVE_RESULT) {
-        int w = cap.get(cv::CAP_PROP_FRAME_WIDTH);
-        int h = cap.get(cv::CAP_PROP_FRAME_HEIGHT);
-        resultVideo.open("result.mp4", cv::VideoWriter::fourcc('M','P','4','V'), 30, cv::Size(w, h));
-    }
 
     cv::Mat frame;
     if (show) {
@@ -340,66 +377,61 @@ int main(int argc, char *argv[]) {
 
         std::cout << "Listening to udp in://0.0.0.0:" << socketPort << std::endl;
 
-	// Creating socket file descriptor
-	if ((sockfd = socket(AF_INET, SOCK_DGRAM, 0)) < 0) {
-		perror("socket creation failed");
-		exit(EXIT_FAILURE);
-	}
+	    // Creating socket file descriptor
+	    if ((sockfd = socket(AF_INET, SOCK_DGRAM, 0)) < 0) {
+		    perror("socket creation failed");
+		    exit(EXIT_FAILURE);
+	    }
 
-	servaddr.sin_family = AF_INET;
-	servaddr.sin_port = htons(port); //socketPort
-	servaddr.sin_addr.s_addr = INADDR_ANY;
+	    servaddr.sin_family = AF_INET;
+	    servaddr.sin_port = htons(port);
+	    servaddr.sin_addr.s_addr = INADDR_ANY;
 
         if (bind(sockfd, (struct sockaddr *)&servaddr, sizeof(servaddr)) < 0)
-             {
-                 std::cout << "Failed to bind socket! " << strerror(errno) << "\n";
-                 return 1;
-             }
-
-	std::cout << port << std::endl;
-        //connect(sockfd, (struct sockaddr *) &servaddr, sizeof(servaddr));
-        
+        {
+            std::cout << "Failed to bind socket! " << strerror(errno) << "\n";
+            return 1;
+        }
     } else {
         std::cout << "Not opening socket" << std::endl;
     }
 
+    pthread_t video_cap;
+    video_cap_data data;
+    data.input          = (char*)camera.input.c_str();
+    data.width          = camera.streamWidth;
+    data.height         = camera.streamHeight;
+    data.camId          = camera.id;
+    data.frameConsumed  = true;
+    if (pthread_create(&video_cap, NULL, readVideoCapture, (void *)&data)){
+        fprintf(stderr, "Error creating thread\n");
+    }
+
     unsigned int frameAmount = 0;
-    float scale_x   = camera.hasCalib ? camera.calibWidth  / camera.streamWidth : 1;
-    float scale_y   = camera.hasCalib ? camera.calibHeight / camera.streamHeight: 1;
+    float scale_x   = camera.hasCalib ? (float) camera.calibWidth  / (float) camera.streamWidth : 1;
+    float scale_y   = camera.hasCalib ? (float) camera.calibHeight / (float) camera.streamHeight: 1;
     std::vector<tk::dnn::box> box_vector;
     std::vector<std::tuple<double, double>> coords;
     std::vector<std::tuple<double, double>> coordsGeo;
     std::vector<std::tuple<double, double, double, double, double, double, double, double>> boxCoords;
     double lat_ur, lat_lr, lat_ll, lat_ul, lon_ur, lon_lr, lon_ll, lon_ul;
     int iters = 0;
-    bool retval = true;
-    // while(gRun) {
+    bool new_frame = false;
     while(not limitedIters or iters < num_iters) {
         batch_dnn_input.clear();
         batch_frame.clear();
-        
-        for(int bi=0; bi< n_batch; ++bi){
-            // cap >> frame;
-            retval = cap.read(frame);
-            // if(!frame.data)
-            if (!retval) {
-                std::cout << "Error when reading frame from stream. Retrying." << std::endl;
-                // usleep(1000000);
-                cap.open(camera.input);
-                continue;
-            }
-            
-            batch_frame.push_back(frame);
-
-            // this will be resized to the net format
-            batch_dnn_input.push_back(frame.clone());
-        }
-        if(!retval) {
-            std::cout << "Error when reading frame from stream. Retrying." << std::endl;
-            // usleep(1000000);
-            cap.open(camera.input);
+        data.mtxF.lock();
+        new_frame = data.frameConsumed;
+        frame = data.frame;
+        data.frameConsumed = true;
+        data.mtxF.unlock();
+        if (new_frame) {
+            usleep(1000);
             continue;
         }
+        batch_frame.push_back(frame);
+        // this will be resized to the net format
+        batch_dnn_input.push_back(frame.clone());
 
         //inference
         detNN->update(batch_dnn_input, n_batch);
@@ -420,9 +452,7 @@ int main(int argc, char *argv[]) {
                                               lon_ul); // box upper left corner
                 box_vector.push_back(box);
                 coords.push_back(std::make_tuple(north, east));
-                // coordsGeo.push_back(std::make_tuple(lat, lon));
                 boxCoords.push_back(std::make_tuple(lat_ur, lon_ur, lat_lr, lon_lr, lat_ll, lon_ll, lat_ul, lon_ul));
-                // printf("\t(%f,%f) converted to (%f,%f)\n", box.x, box.y, north, east);
             }
         }
 
@@ -430,10 +460,8 @@ int main(int argc, char *argv[]) {
         // send thru socket or pipe
         if (use_socket) {
             unsigned int size;
-            // char *data = prepareMessage(box_vector, coords, coordsGeo, boxCoords, frameAmount, camera_id, &size);
-            
 	        char *data = prepareMessage(box_vector, coords, boxCoords, frameAmount, camera_id,
-	        camera.adfGeoTransform[3], camera.adfGeoTransform[0], &size);
+	                camera.adfGeoTransform[3], camera.adfGeoTransform[0], &size, scale_x, scale_y);
 
 
             std::cout << "[" << frameAmount << "] Processing frame..." << std::endl;
@@ -475,9 +503,6 @@ int main(int argc, char *argv[]) {
         coordsGeo.clear();
         boxCoords.clear();
 
-        if (n_batch == 1 && SAVE_RESULT)
-            resultVideo << frame;
-
         detNN->draw(batch_frame);
 
         if (show) {
@@ -491,21 +516,9 @@ int main(int argc, char *argv[]) {
         iters++;
     }
 
+    pthread_join( video_cap, NULL);
+
     std::cout<<"detection end\n";
-    /*if (use_socket) {
-        // sending flag to python workflow to mark the end of the video processing
-        char flag = 0;
-        // app_socket->send(&flag, 0);				//
-        // app_socket->recv(&unimportant_message);
-
- 		char recvBuffer[1024];
-		int n;
-        socklen_t len;
-
-        sendto(sockfd, &flag, sizeof(flag), 0, (const struct sockaddr *) &servaddr, sizeof(servaddr));
-        n = recvfrom(sockfd, (char *)recvBuffer, 1024, MSG_WAITALL, (struct sockaddr *) &servaddr, &len);
-        recvBuffer[n] = '\0';
-    }*/
 
     double mean = 0;
     std::cout<<COL_GREENB<<"\n\nTime stats:\n";
@@ -515,12 +528,7 @@ int main(int argc, char *argv[]) {
     std::cout<<"Avg: "<<mean/n_batch<<" ms\t"<<1000/(mean/n_batch)<<" FPS\n"<<COL_END;
 
     if (use_socket) {
-//         if (app_socket->connected()) {
-//             app_socket->close();
-//         }
-//         delete app_socket;
-		close(sockfd);	
-
+		close(sockfd);
     }
     return 0;
 }
